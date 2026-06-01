@@ -39,7 +39,7 @@ def check(name, fn):
 
 # ── Smoke: every module must import cleanly ──────────────────────────────────
 MODULES = [
-    "styles", "data_manager", "widgets", "harris_view", "bone_view",
+    "styles", "data_manager", "icons", "widgets", "harris_view", "bone_view",
     "recording_sheets", "pdf_export", "dock", "plugin",
 ]
 

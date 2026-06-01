@@ -293,7 +293,10 @@ class DataTable(QTableWidget):
             self.setProperty("_fids", fids)
         for ri, row in enumerate(rows):
             for ci, val in enumerate(row):
-                item = QTableWidgetItem(str(val) if val is not None else "")
+                _s = "" if val is None else str(val)
+                if _s.strip().lower() in ("null", "none", "nan", "<null>"):
+                    _s = ""
+                item = QTableWidgetItem(_s)
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 self.setItem(ri, ci, item)
         self.resizeColumnsToContents()

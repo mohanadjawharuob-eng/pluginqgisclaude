@@ -60,7 +60,8 @@ from .styles import (APP_QSS, TAB_QSS, CARD_QSS, INPUT_QSS,
 from .data_manager import (SCHEMAS, TABLE_NAMES, coerce, vlayers as dm_vlayers,
                             lyr_from_cb, schema_for, write_feature, delete_features,
                             create_project as dm_create_project, open_gpkg as dm_open_gpkg,
-                            detect_sites, find_layer, safe_int, user_data_path)
+                            detect_sites, find_layer, safe_int, user_data_path,
+                            fmt_cell)
 from .recording_sheets import RecordingSheetsTab
 from .harris_view import HarrisView
 
@@ -457,7 +458,7 @@ class _HistoryAndTabsMixin:
         for ri,feat in enumerate(feats):
             for ci,fn in enumerate(fnames):
                 v=feat.attribute(fn)
-                self.draw_tbl.setItem(ri,ci,QTableWidgetItem(str(v) if v is not None else ''))
+                self.draw_tbl.setItem(ri,ci,QTableWidgetItem(fmt_cell(v)))
 
     def _add_drawing(self):
         lyr=self._lyr(self.draw_layer_cb)
@@ -954,7 +955,7 @@ class _HistoryAndTabsMixin:
         for ri,feat in enumerate(feats):
             for ci,fn in enumerate(fnames):
                 v=feat.attribute(fn)
-                self.hist_tbl.setItem(ri,ci,QTableWidgetItem(str(v) if v is not None else ''))
+                self.hist_tbl.setItem(ri,ci,QTableWidgetItem(fmt_cell(v)))
 
     def _clear_history(self):
         lyr=self._lyr(self.hist_layer_cb)
@@ -1146,7 +1147,7 @@ class _ArchaeologistMixin:
             for ri, feat in enumerate(feats):
                 for ci, fname in enumerate(fnames):
                     v = feat.attribute(fname)
-                    tbl.setItem(ri, ci, QTableWidgetItem(str(v) if v is not None else ""))
+                    tbl.setItem(ri, ci, QTableWidgetItem(fmt_cell(v)))
             total += len(feats)
 
         self.arch_status.setText(f"Showing {total} records for '{person}'")
@@ -1341,7 +1342,7 @@ class _GridMapMixin:
         for ri,feat in enumerate(feats):
             for ci,fn in enumerate(fnames):
                 v=feat.attribute(fn)
-                self.grid_tbl.setItem(ri,ci,QTableWidgetItem(str(v) if v is not None else ''))
+                self.grid_tbl.setItem(ri,ci,QTableWidgetItem(fmt_cell(v)))
 
     def _on_grid_select(self):
         """Select grid on map when clicked in table."""
@@ -1401,8 +1402,7 @@ class _GridMapMixin:
         # Capture map canvas
         from qgis.PyQt.QtCore import QSize
         canvas=self.iface.mapCanvas()
-        canvas_px=QPixmap(canvas.size())
-        canvas.render(canvas_px)
+        canvas_px=canvas.grab()   # QWidget.grab() -> QPixmap (render() needs a QPainter)
 
         # Compose final image with overlay
         margin=40; W=canvas_px.width()+2*margin; H=canvas_px.height()+2*margin+80
@@ -1879,174 +1879,112 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         return page
 
     def _build_home_tab(self):
-        """Dashboard home tab — stat cards + recent activity + data overview."""
-        page = QWidget()
-        page.setStyleSheet("background:transparent;")
+        """Dashboard home — connection, stat cards, next steps, map, photo."""
+        _c = getattr(self, '_current_theme', CLR)
+        page = QWidget(); page.setStyleSheet("background:transparent;")
         page_layout = QVBoxLayout(page)
         page_layout.setContentsMargins(0, 0, 0, 0); page_layout.setSpacing(0)
-
-        # Wrap content in a scroll area for small windows
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area = QScrollArea(); scroll_area.setWidgetResizable(True)
         scroll_area.setStyleSheet("QScrollArea{background:transparent;border:none;}")
-        scroll_content = QWidget()
-        scroll_content.setStyleSheet("background:transparent;")
-        scroll_content.setSizePolicy(
-            scroll_content.sizePolicy().horizontalPolicy(),
-            scroll_content.sizePolicy().verticalPolicy()
-        )
+        scroll_content = QWidget(); scroll_content.setStyleSheet("background:transparent;")
         outer = QVBoxLayout(scroll_content)
-        outer.setContentsMargins(32, 28, 32, 28); outer.setSpacing(24)
+        outer.setContentsMargins(24, 22, 24, 24); outer.setSpacing(18)
 
-        # ── Site Connection card ──
+        # ── Site Connection ──
         site_card = Card("Site Connection", "Open project and connect layers")
-        sc_body = site_card.body_layout
-
-        # Row 1: ComboBox + Open + Scan + Connect
         sc_row1 = QHBoxLayout(); sc_row1.setSpacing(8)
-        self.site_select_cb = QComboBox()
-        self.site_select_cb.setMinimumWidth(160)
+        self.site_select_cb = QComboBox(); self.site_select_cb.setMinimumWidth(160)
         sc_row1.addWidget(self.site_select_cb, 1)
-        home_open_btn = QPushButton("📂 Open"); home_open_btn.setObjectName("btn_secondary")
-        home_open_btn.setCursor(Qt.PointingHandCursor); home_open_btn.clicked.connect(self._open_gpkg_file)
-        home_scan_btn = QPushButton("↻"); home_scan_btn.setObjectName("btn_secondary")
-        home_scan_btn.setFixedWidth(38); home_scan_btn.setCursor(Qt.PointingHandCursor)
+        home_open_btn = QPushButton("Open"); home_open_btn.setObjectName("btn_secondary")
+        home_open_btn.clicked.connect(self._open_gpkg_file)
+        home_scan_btn = QPushButton("Scan"); home_scan_btn.setObjectName("btn_secondary")
         home_scan_btn.setToolTip("Scan layers"); home_scan_btn.clicked.connect(self._scan_sites)
         home_conn_btn = QPushButton("Connect"); home_conn_btn.setObjectName("btn_primary")
-        home_conn_btn.setCursor(Qt.PointingHandCursor); home_conn_btn.clicked.connect(self._connect_site)
-        for b in [home_open_btn, home_scan_btn, home_conn_btn]:
-            sc_row1.addWidget(b)
-        sc_body.addLayout(sc_row1)
-
-        # Row 2: site badge + import buttons
-        sc_row2 = QHBoxLayout(); sc_row2.setSpacing(8)
+        home_conn_btn.clicked.connect(self._connect_site)
+        imp_xl_btn = QPushButton("Import Excel"); imp_xl_btn.setObjectName("btn_secondary"); imp_xl_btn.clicked.connect(self._imp_xl)
+        imp_csv_btn = QPushButton("Import CSV"); imp_csv_btn.setObjectName("btn_secondary"); imp_csv_btn.clicked.connect(self._imp_csv)
+        for b in [home_open_btn, home_scan_btn, home_conn_btn, imp_xl_btn, imp_csv_btn]:
+            b.setCursor(Qt.PointingHandCursor); sc_row1.addWidget(b)
+        site_card.body_layout.addLayout(sc_row1)
         self._site_badge = StatusBadge()
-        sc_row2.addWidget(self._site_badge, 1)
-        imp_xl_btn = QPushButton("📂 Import Excel"); imp_xl_btn.setObjectName("btn_secondary")
-        imp_xl_btn.setCursor(Qt.PointingHandCursor); imp_xl_btn.clicked.connect(self._imp_xl)
-        imp_csv_btn = QPushButton("📂 Import CSV"); imp_csv_btn.setObjectName("btn_secondary")
-        imp_csv_btn.setCursor(Qt.PointingHandCursor); imp_csv_btn.clicked.connect(self._imp_csv)
-        sc_row2.addWidget(imp_xl_btn); sc_row2.addWidget(imp_csv_btn)
-        sc_body.addLayout(sc_row2)
+        site_card.body_layout.addWidget(self._site_badge)
         outer.addWidget(site_card)
 
-        # ── Site Location (map) + Completion + Photo ──────────────────────────
-        site_row = QHBoxLayout(); site_row.setSpacing(16)
+        # ── Stat cards ──
+        stats_row = QHBoxLayout(); stats_row.setSpacing(16)
+        self._sc_contexts  = StatCard("Contexts",  "0", "\u25a6")
+        self._sc_finds     = StatCard("Finds",     "0", "\u2697", accent=_c.get('accent_3'))
+        self._sc_skeletons = StatCard("Skeletons", "0", "\u2620", accent=_c.get('accent_2'))
+        self._sc_drawings  = StatCard("Drawings",  "0", "\u25a1", accent=_c.get('status_ok'))
+        for sc in [self._sc_contexts, self._sc_finds, self._sc_skeletons, self._sc_drawings]:
+            stats_row.addWidget(sc, 1)
+        outer.addLayout(stats_row)
 
-        # Left: live map canvas of the site
+        # ── Next steps + Recent activity ──
+        row2 = QHBoxLayout(); row2.setSpacing(16)
+        steps_card = Card("Your next steps", "Guided workflow")
+        self._home_steps = QVBoxLayout(); self._home_steps.setSpacing(2)
+        steps_card.body_layout.addLayout(self._home_steps); steps_card.body_layout.addStretch()
+        row2.addWidget(steps_card, 3)
+        ra_card = Card("Recent Activity", "Latest edits")
+        self._home_activity = QVBoxLayout(); self._home_activity.setSpacing(6)
+        ra_card.body_layout.addLayout(self._home_activity); ra_card.body_layout.addStretch()
+        row2.addWidget(ra_card, 2)
+        outer.addLayout(row2)
+
+        # ── Site map ──
         map_card = Card("Site Location", "Connected layers on the map")
         map_v = QVBoxLayout(); map_v.setSpacing(8)
         try:
             from qgis.gui import QgsMapCanvas
             from qgis.core import QgsProject
             self._home_canvas = QgsMapCanvas()
-            self._home_canvas.setMinimumHeight(280)
+            self._home_canvas.setMinimumHeight(260)
             self._home_canvas.setCanvasColor(Qt.white)
-            try:
-                self._home_canvas.setDestinationCrs(QgsProject.instance().crs())
+            try: self._home_canvas.setDestinationCrs(QgsProject.instance().crs())
             except Exception: pass
             map_v.addWidget(self._home_canvas, 1)
             map_btns = QHBoxLayout(); map_btns.setSpacing(8)
-            zoom_btn = QPushButton("🎯 Zoom to site"); zoom_btn.setObjectName("btn_secondary")
-            zoom_btn.clicked.connect(self._home_zoom_to_site)
-            refr_btn = QPushButton("↻ Refresh map"); refr_btn.setObjectName("btn_secondary")
-            refr_btn.clicked.connect(self._home_refresh_map)
-            map_btns.addWidget(zoom_btn); map_btns.addWidget(refr_btn); map_btns.addStretch()
-            map_v.addLayout(map_btns)
+            zoom_btn = QPushButton("Zoom to site"); zoom_btn.setObjectName("btn_secondary"); zoom_btn.clicked.connect(self._home_zoom_to_site)
+            refr_btn = QPushButton("Refresh"); refr_btn.setObjectName("btn_secondary"); refr_btn.clicked.connect(self._home_refresh_map)
+            base_btn = QPushButton("Add basemap"); base_btn.setObjectName("btn_secondary"); base_btn.clicked.connect(self._add_basemap)
+            for b in (zoom_btn, refr_btn, base_btn): b.setCursor(Qt.PointingHandCursor); map_btns.addWidget(b)
+            map_btns.addStretch(); map_v.addLayout(map_btns)
         except Exception:
             self._home_canvas = None
-            ph = QLabel("🗺  Map canvas unavailable")
-            ph.setAlignment(Qt.AlignCenter); ph.setMinimumHeight(280)
-            ph.setObjectName("mapPlaceholder")
-            map_v.addWidget(ph)
+            ph = QLabel("Map canvas unavailable"); ph.setAlignment(Qt.AlignCenter)
+            ph.setMinimumHeight(260); ph.setObjectName("mapPlaceholder"); map_v.addWidget(ph)
         map_card.body_layout.addLayout(map_v)
-        site_row.addWidget(map_card, 3)
+        outer.addWidget(map_card)
 
-        # Right column: Project Completion progress card on top, Site Photo below
-        right_col = QVBoxLayout(); right_col.setSpacing(16)
-
-        # Project completion progress card
+        # ── Completion + Site photo ──
+        row3 = QHBoxLayout(); row3.setSpacing(16)
         prog_card = Card("Project Completion", "Data entry progress")
         prog_v = QVBoxLayout(); prog_v.setSpacing(12)
-        self._prog_pct_lbl = QLabel("0%")
-        self._prog_pct_lbl.setObjectName("statBig")
-        self._prog_pct_lbl.setAlignment(Qt.AlignCenter)
+        self._prog_pct_lbl = QLabel("0%"); self._prog_pct_lbl.setObjectName("statBig"); self._prog_pct_lbl.setAlignment(Qt.AlignCenter)
         prog_v.addWidget(self._prog_pct_lbl)
-        self._prog_bar = QProgressBar()
-        self._prog_bar.setRange(0, 100); self._prog_bar.setValue(0)
-        self._prog_bar.setTextVisible(False); self._prog_bar.setFixedHeight(10)
-        prog_v.addWidget(self._prog_bar)
-        self._prog_detail = QLabel("No site connected")
-        self._prog_detail.setObjectName("cardSub")
-        self._prog_detail.setAlignment(Qt.AlignCenter)
+        self._prog_bar = QProgressBar(); self._prog_bar.setRange(0,100); self._prog_bar.setValue(0)
+        self._prog_bar.setTextVisible(False); self._prog_bar.setFixedHeight(10); prog_v.addWidget(self._prog_bar)
+        self._prog_detail = QLabel("No site connected"); self._prog_detail.setObjectName("cardSub"); self._prog_detail.setAlignment(Qt.AlignCenter)
         prog_v.addWidget(self._prog_detail)
         prog_card.body_layout.addLayout(prog_v)
-        right_col.addWidget(prog_card)
+        row3.addWidget(prog_card, 2)
 
-        # Site photo card
         photo_card = Card("Site Photo", "Current excavation site")
         photo_v = QVBoxLayout(); photo_v.setSpacing(8)
-        self._site_photo_lbl = QLabel()
-        self._site_photo_lbl.setMinimumHeight(140)
-        self._site_photo_lbl.setAlignment(Qt.AlignCenter)
-        self._site_photo_lbl.setObjectName("photoPlaceholder")
-        self._site_photo_lbl.setText("📷  No site photo")
+        self._site_photo_lbl = QLabel(); self._site_photo_lbl.setMinimumHeight(160)
+        self._site_photo_lbl.setAlignment(Qt.AlignCenter); self._site_photo_lbl.setObjectName("photoPlaceholder")
+        self._site_photo_lbl.setText("No site photo")
         photo_v.addWidget(self._site_photo_lbl, 1)
-        upload_btn = QPushButton("📁 Upload Photo"); upload_btn.setObjectName("btn_secondary")
-        upload_btn.clicked.connect(self._upload_site_photo)
-        photo_v.addWidget(upload_btn)
+        self._photo_upload_btn = QPushButton("Upload photo"); self._photo_upload_btn.setObjectName("btn_secondary")
+        self._photo_upload_btn.setCursor(Qt.PointingHandCursor); self._photo_upload_btn.clicked.connect(self._upload_site_photo)
+        self._photo_remove_btn = QPushButton("Remove photo"); self._photo_remove_btn.setObjectName("btn_ghost")
+        self._photo_remove_btn.setCursor(Qt.PointingHandCursor); self._photo_remove_btn.clicked.connect(self._remove_site_photo)
+        self._photo_remove_btn.setVisible(False)
+        photo_v.addWidget(self._photo_upload_btn); photo_v.addWidget(self._photo_remove_btn)
         photo_card.body_layout.addLayout(photo_v)
-        right_col.addWidget(photo_card)
-
-        right_w = QWidget(); right_w.setStyleSheet("background:transparent;"); right_w.setLayout(right_col)
-        site_row.addWidget(right_w, 2)
-        outer.addLayout(site_row)
-
-        # ── Quick actions card ──
-        qa_card = Card("Quick Actions", "Frequently used tools")
-        qa_row = QHBoxLayout(); qa_row.setSpacing(10)
-        qa_btn_specs = [
-            ("🆕  New Project", "btn_primary", self._create_project),
-            ("📋  Add Context", "btn_secondary", lambda: self._switch_nav_to("Contexts")),
-            ("🏺  Add Pottery", "btn_secondary", lambda: self._switch_nav_to("Pottery")),
-            ("⚱  Add Artifact", "btn_secondary", lambda: self._switch_nav_to("Artifacts")),
-            ("💀  Add Skeleton", "btn_secondary", lambda: self._switch_nav_to("Recording Sheet")),
-        ]
-        for label, obj_name, cb in qa_btn_specs:
-            b = QPushButton(label); b.setObjectName(obj_name)
-            b.setCursor(Qt.PointingHandCursor); b.clicked.connect(cb)
-            qa_row.addWidget(b)
-        qa_row.addStretch()
-        qa_card.body_layout.addLayout(qa_row)
-        outer.addWidget(qa_card)
-
-        # ── Two-column row: Recent Activity (left), Data Overview (right) ──
-        middle = QHBoxLayout(); middle.setSpacing(16)
-
-        # Recent activity card
-        ra_card = Card("Recent Activity", "Latest edits across all data")
-        self._home_activity = QVBoxLayout(); self._home_activity.setSpacing(6)
-        ra_placeholder = QLabel("No activity yet — load data to see recent edits")
-        ra_placeholder.setObjectName("emptyState")
-        ra_placeholder.setAlignment(Qt.AlignCenter)
-        self._home_activity.addWidget(ra_placeholder)
-        ra_card.body_layout.addLayout(self._home_activity)
-        ra_card.body_layout.addStretch()
-        middle.addWidget(ra_card, 1)
-
-        # Data overview card
-        ov_card = Card("Data Overview", "Records by category")
-        self._home_overview = QVBoxLayout(); self._home_overview.setSpacing(8)
-        ov_placeholder = QLabel("Connect a site to see the overview")
-        ov_placeholder.setObjectName("emptyState")
-        ov_placeholder.setAlignment(Qt.AlignCenter)
-        self._home_overview.addWidget(ov_placeholder)
-        ov_card.body_layout.addLayout(self._home_overview)
-        ov_card.body_layout.addStretch()
-        middle.addWidget(ov_card, 1)
-
-        outer.addLayout(middle, 1)
+        row3.addWidget(photo_card, 3)
+        outer.addLayout(row3)
 
         scroll_area.setWidget(scroll_content)
         page_layout.addWidget(scroll_area, 1)
@@ -2707,6 +2645,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         try:
             self._refresh_home_activity()
             self._refresh_home_overview()
+            self._refresh_next_steps()
         except Exception: pass
 
     def _upload_site_photo(self):
@@ -2732,11 +2671,15 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         try:
             px = QPixmap(path)
             if not px.isNull():
-                px = px.scaled(self._site_photo_lbl.width() or 300,
-                               self._site_photo_lbl.height() or 140,
-                               Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                self._site_photo_lbl.setPixmap(px)
+                w = self._site_photo_lbl.width() or 320
+                h = self._site_photo_lbl.height() or 160
+                self._site_photo_lbl.setPixmap(
+                    px.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
                 self._site_photo_lbl.setText("")
+                self._site_photo_lbl.setStyleSheet("border:none;background:transparent;")
+                self._site_photo_path = path
+                if hasattr(self, '_photo_upload_btn'): self._photo_upload_btn.setVisible(False)
+                if hasattr(self, '_photo_remove_btn'): self._photo_remove_btn.setVisible(True)
         except Exception: pass
 
     def _update_completion(self):
@@ -2871,40 +2814,98 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             self._home_activity.addWidget(row)
 
     def _refresh_home_overview(self):
-        if not hasattr(self, '_home_overview'): return
-        while self._home_overview.count():
-            it = self._home_overview.takeAt(0)
+        # Update the dashboard stat cards from the connected layers.
+        def _count(cb):
+            lyr = self._lyr(cb) if cb is not None else None
+            try: return lyr.featureCount() if lyr else 0
+            except Exception: return 0
+        if hasattr(self, '_sc_contexts'):
+            self._sc_contexts.set_value(_count(getattr(self, 'ctx_layer_cb', None)))
+            self._sc_finds.set_value(_count(getattr(self, 'pot_layer_cb', None)) +
+                                     _count(getattr(self, 'art_layer_cb', None)))
+            self._sc_skeletons.set_value(_count(getattr(self, 'ske_layer_cb', None)))
+            self._sc_drawings.set_value(_count(getattr(self, 'draw_layer_cb', None)))
+
+    def _refresh_next_steps(self):
+        if not hasattr(self, '_home_steps'): return
+        while self._home_steps.count():
+            it = self._home_steps.takeAt(0)
             if it.widget(): it.widget().deleteLater()
-        counts = []
-        for label, cb in [("Contexts", self.ctx_layer_cb),
-                          ("Pottery", self.pot_layer_cb),
-                          ("Artifacts", self.art_layer_cb),
-                          ("Skeletons", self.ske_layer_cb)]:
-            lyr = self._lyr(cb)
-            n = lyr.featureCount() if lyr else 0
-            counts.append((label, n))
-        total = sum(c for _, c in counts) or 1
-        _tc = getattr(self, '_current_theme', CLR)
-        colors = [_tc['accent'], _tc['accent_2'], _tc['accent_3'], _tc['accent_warn']]
-        for i, (label, n) in enumerate(counts):
-            row = QVBoxLayout(); row.setSpacing(3)
-            top = QHBoxLayout()
-            l = QLabel(label)
-            l.setStyleSheet(f"color:{_tc['text']};font-size:{FONT_SIZE_SM};background:transparent;")
-            v = QLabel(f"{n}  ({100*n//total}%)")
-            v.setStyleSheet(f"color:{_tc['text_dim']};font-size:{FONT_SIZE_SM};background:transparent;")
-            top.addWidget(l); top.addStretch(); top.addWidget(v)
-            row.addLayout(top)
-            bar = QFrame()
-            bar.setFixedHeight(6)
-            pct = int(200 * n / total)
-            bar.setStyleSheet(
-                f"background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-                f"stop:0 {colors[i%4]},stop:{max(0.01,n/total):.2f} {colors[i%4]},"
-                f"stop:{min(0.99,n/total+0.001):.2f} {_tc['bg_card_2']},stop:1 {_tc['bg_card_2']});"
-                f"border-radius:3px;")
-            row.addWidget(bar)
-            self._home_overview.addLayout(row)
+        def _count(cb):
+            lyr = self._lyr(cb) if cb is not None else None
+            try: return lyr.featureCount() if lyr else 0
+            except Exception: return 0
+        connected = bool(getattr(self, '_current_site', ''))
+        n_ctx = _count(getattr(self, 'ctx_layer_cb', None))
+        n_rel = len(getattr(self, 'relationships', []) or []) + len(getattr(self, 'layer_rels', []) or [])
+        steps = [
+            (connected, "Connect a site", "Open a GeoPackage and connect its layers"),
+            (n_ctx > 0, "Record contexts" + (" (%d)" % n_ctx if n_ctx else ""),
+             "Add stratigraphic units under Stratigraphy"),
+            (n_rel > 0, "Build the Harris Matrix",
+             "Link contexts under Relationships, then Build Matrix"),
+            (False, "Export the site report", "Generate a PDF once recording is complete"),
+        ]
+        _c = getattr(self, '_current_theme', CLR)
+        for done, title, desc in steps:
+            self._home_steps.addWidget(self._step_row(done, title, desc, _c))
+
+    def _step_row(self, done, title, desc, c):
+        w = QWidget(); w.setStyleSheet("background:transparent;")
+        h = QHBoxLayout(w); h.setContentsMargins(0, 6, 0, 6); h.setSpacing(10)
+        dot = QLabel("\u2713" if done else "\u2022"); dot.setFixedSize(22, 22)
+        dot.setAlignment(Qt.AlignCenter)
+        col = c['status_ok'] if done else c['accent']
+        dot.setStyleSheet(f"background:{col};color:#ffffff;border-radius:11px;"
+                          f"font-weight:700;font-size:11px;")
+        h.addWidget(dot)
+        tcol = QVBoxLayout(); tcol.setSpacing(1)
+        t = QLabel(title); t.setStyleSheet(f"color:{c['text']};font-size:12px;font-weight:600;background:transparent;")
+        d = QLabel(desc); d.setStyleSheet(f"color:{c['text_dim']};font-size:10px;background:transparent;")
+        tcol.addWidget(t); tcol.addWidget(d); h.addLayout(tcol, 1)
+        return w
+
+    def _add_basemap(self):
+        """Add an OpenStreetMap XYZ basemap to the project (needs internet)."""
+        try:
+            from qgis.core import QgsProject, QgsRasterLayer
+            for lyr in QgsProject.instance().mapLayers().values():
+                if lyr.name() == "OpenStreetMap":
+                    self._home_refresh_map(); self._msg("Basemap already added."); return
+            url = ("type=xyz&url=https://tile.openstreetmap.org/"
+                   "%7Bz%7D/%7Bx%7D/%7By%7D.png&zmax=19&zmin=0")
+            lyr = QgsRasterLayer(url, "OpenStreetMap", "wms")
+            if not lyr.isValid():
+                self._msg("Could not load basemap (needs internet).", error=True); return
+            QgsProject.instance().addMapLayer(lyr)
+            try:
+                root = QgsProject.instance().layerTreeRoot()
+                node = root.findLayer(lyr.id())
+                if node is not None:
+                    clone = node.clone(); root.insertChildNode(-1, clone)
+                    root.removeChildNode(node)
+            except Exception: pass
+            self._home_refresh_map()
+            self._msg("OpenStreetMap basemap added.")
+        except Exception as e:
+            self._msg(f"Basemap error: {e}", error=True)
+
+    def _remove_site_photo(self):
+        self._site_photo_path = None
+        if hasattr(self, '_site_photo_lbl'):
+            self._site_photo_lbl.setPixmap(QPixmap())
+            self._site_photo_lbl.setText("No site photo")
+        if hasattr(self, '_photo_upload_btn'): self._photo_upload_btn.setVisible(True)
+        if hasattr(self, '_photo_remove_btn'): self._photo_remove_btn.setVisible(False)
+        try:
+            import json
+            cfg_path = user_data_path('.site_photos.json')
+            cfg = {}
+            if os.path.exists(cfg_path):
+                with open(cfg_path) as _f: cfg = json.load(_f)
+            cfg.pop(getattr(self, '_current_site', 'default'), None)
+            with open(cfg_path, 'w') as _f: json.dump(cfg, _f)
+        except Exception: pass
 
     def _build_layer_config_form(self, lf):
         def _rl(text):
@@ -3334,7 +3335,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             typ=feat.attribute(type_fn) if type_fn else ""
             art_nums.append(aid)
             for ci,v in enumerate([aid,ctx,typ]):
-                self.artdet_list.setItem(ri,ci,QTableWidgetItem(str(v) if v is not None else ""))
+                self.artdet_list.setItem(ri,ci,QTableWidgetItem(fmt_cell(v)))
         self.artdet_list.setProperty("_art_nums",art_nums)
 
     def _on_artdet_select(self):
@@ -3516,7 +3517,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             for ri,feat in enumerate(feats):
                 for ci,fn in enumerate(fnames):
                     v=feat.attribute(fn)
-                    tbl.setItem(ri,ci,QTableWidgetItem(str(v) if v is not None else ''))
+                    tbl.setItem(ri,ci,QTableWidgetItem(fmt_cell(v)))
 
         fill_linked(None,self.pot_layer_cb,self.pot_num_field,self.ctxdet_pot_tbl)
         fill_linked(None,self.art_layer_cb,self.art_num_field,self.ctxdet_art_tbl)
@@ -4076,7 +4077,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         self.ctx_tbl.setRowCount(len(feats)); self.ctx_tbl.setProperty("_fids",[f.id() for f in feats])
         for ri,feat in enumerate(feats):
             for ci,fn in enumerate(fnames):
-                v=feat.attribute(fn); self.ctx_tbl.setItem(ri,ci,QTableWidgetItem(str(v) if v is not None else ''))
+                v=feat.attribute(fn); self.ctx_tbl.setItem(ri,ci,QTableWidgetItem(fmt_cell(v)))
 
     def _fill_ske_tbl(self):
         lyr=self._lyr(self.ske_layer_cb)
@@ -4086,7 +4087,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         self.ske_tbl.setRowCount(len(feats)); self.ske_tbl.setProperty("_fids",[f.id() for f in feats])
         for ri,feat in enumerate(feats):
             for ci,fn in enumerate(fnames):
-                v=feat.attribute(fn); self.ske_tbl.setItem(ri,ci,QTableWidgetItem(str(v) if v is not None else ''))
+                v=feat.attribute(fn); self.ske_tbl.setItem(ri,ci,QTableWidgetItem(fmt_cell(v)))
 
     def _refresh_ske_cb(self):
         lyr=self._lyr(self.ske_layer_cb)
@@ -4114,7 +4115,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         tbl.setRowCount(len(feats)); tbl.setProperty("_fids",[f.id() for f in feats])
         for ri,feat in enumerate(feats):
             for ci,fn in enumerate(fnames):
-                v=feat.attribute(fn); tbl.setItem(ri,ci,QTableWidgetItem(str(v) if v is not None else ''))
+                v=feat.attribute(fn); tbl.setItem(ri,ci,QTableWidgetItem(fmt_cell(v)))
 
     # ── Read layer relationships ───────────────────────────────────────────────
     def _read_layer_rels(self):
@@ -4600,6 +4601,11 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         dlg=ReportDesignerDialog(self)
         # Pre-fill site from project
         dlg._site.setText(getattr(self,'_current_site',''))
+        # Use the uploaded dashboard site photo as the cover hero by default
+        _sp = getattr(self, '_site_photo_path', None)
+        if _sp:
+            try: dlg._cover_img.setText(_sp)
+            except Exception: pass
         if dlg.exec_()!=QDialog.Accepted: return
         opts=dlg.get_options()
         path,_=QFileDialog.getSaveFileName(self,"Save PDF Report","report.pdf","PDF (*.pdf)")

@@ -152,6 +152,24 @@ def coerce(val, qtype):
     return str(val)
 
 
+def fmt_cell(v):
+    """Display string for a table cell — QGIS NULL / None / 'NULL' become ''.
+
+    QGIS returns empty fields as a QVariant null (not Python None), whose str()
+    is the literal 'NULL'; this turns those into a blank cell.
+    """
+    if v is None:
+        return ""
+    try:
+        from qgis.PyQt.QtCore import QVariant
+        if isinstance(v, QVariant) and v.isNull():
+            return ""
+    except Exception:
+        pass
+    s = str(v)
+    return "" if s.strip().lower() in ("null", "none", "nan", "<null>") else s
+
+
 def vlayers():
     """Return all valid vector layers from the current QGIS project."""
     result = []

@@ -1,0 +1,8 @@
+Archaeological Manager — improved build
+=======================================
+- arch_manager_v2/   the QGIS plugin (install this folder as usual; see
+                     arch_manager_v2/REVIEW.md for the full change log)
+- tests/             offline test harness (no QGIS/PyQt/pytest required)
+
+Run the tests from this folder:
+    python3 tests/run_tests.py

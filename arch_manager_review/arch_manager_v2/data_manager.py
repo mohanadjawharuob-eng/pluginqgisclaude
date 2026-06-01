@@ -76,12 +76,20 @@ TABLE_NAMES = list(SCHEMAS.keys())
 
 
 def coerce(val, qtype):
-    """Convert a value to the correct Python type for a QVariant field."""
+    """Convert a value to the correct Python type for a QVariant field.
+
+    Handles all integer variants (GeoPackage integer columns are commonly
+    reported as ``LongLong``, not ``Int``) and treats blank / NULL / None as
+    a genuine NULL rather than the literal text 'NULL'.
+    """
     if val is None or str(val).strip() in ('', 'NULL', 'None'):
         return None
     try:
-        if qtype == QVariant.Int:   return int(float(str(val)))
-        if qtype == QVariant.Double: return float(str(val))
+        if qtype in (QVariant.Int, QVariant.LongLong,
+                     QVariant.UInt, QVariant.ULongLong):
+            return int(float(str(val)))
+        if qtype == QVariant.Double:
+            return float(str(val))
     except (ValueError, TypeError):
         return None
     return str(val)

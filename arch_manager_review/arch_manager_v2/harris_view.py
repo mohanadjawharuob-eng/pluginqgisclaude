@@ -8,7 +8,7 @@ from qgis.PyQt.QtSvg import QSvgGenerator
 
 from .styles import CLR, FONT_MONO
 
-BOX_W, BOX_H, H_GAP, V_GAP, PAD = 80, 28, 16, 42, 36
+BOX_W, BOX_H, H_GAP, V_GAP, PAD = 112, 44, 46, 78, 46
 
 CTX_COLORS = {
     'fill':'#b8d4c8','cut':'#e8b99a','deposit':'#d4c89a','layer':'#c4b8d8',
@@ -34,6 +34,12 @@ def compute_layout(contexts,relationships):
     for i in ids: lvl(i)
     groups={}
     for i in ids: groups.setdefault(memo.get(i,0),[]).append(i)
+    # Split level-0 group (unconnected contexts) into sub-rows of 6
+    if 0 in groups and len(groups[0]) > 6:
+        g0 = groups[0]
+        del groups[0]
+        for chunk_i, start in enumerate(range(0, len(g0), 6)):
+            groups[-chunk_i] = g0[start:start+6]
     levels=sorted(groups,reverse=True)
     mpr=max(len(g) for g in groups.values())
     W=max(540,PAD*2+mpr*(BOX_W+H_GAP)-H_GAP); pos={}

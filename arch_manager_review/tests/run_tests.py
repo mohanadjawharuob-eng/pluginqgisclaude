@@ -62,6 +62,7 @@ def test_coerce():
     from qgis.PyQt.QtCore import QVariant
     assert coerce("5", QVariant.Int) == 5
     assert coerce("5.9", QVariant.Int) == 5            # int(float(...))
+    assert coerce("7", QVariant.LongLong) == 7         # GPKG integer columns
     assert coerce("3.5", QVariant.Double) == 3.5
     assert coerce("hello", QVariant.String) == "hello"
     # The bug the dock.py copy had: "NULL"/"None"/"" must become None, not text

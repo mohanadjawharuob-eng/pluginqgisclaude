@@ -293,7 +293,11 @@ class LoginDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Welcome — Arch Manager")
         self.setMinimumWidth(360)
-        self.setStyleSheet(ROOT_QSS)
+        # Coherent light dialog (the app opens in light mode); an explicit
+        # QDialog background is required because the base QSS sets QWidget
+        # backgrounds transparent — without it the labels were white-on-white.
+        self.setStyleSheet(build_all_qss(LIGHT_CLR) +
+                           f"QDialog{{background:{LIGHT_CLR['bg_root']};}}")
         vl = QVBoxLayout(self)
         vl.setContentsMargins(24, 24, 24, 24); vl.setSpacing(16)
 

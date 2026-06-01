@@ -203,15 +203,6 @@ class NavItem(QPushButton):
         self._icon_lbl = ic
         self._paint_icon(self._c.get('sidebar_text_dim', self._c['text_dim']))
         h.addWidget(ic)
-
-    def _paint_icon(self, color):
-        """Render the icon as a recoloured SVG, or fall back to text/emoji."""
-        if icon_has(self._icon):
-            self._icon_lbl.setPixmap(icon_pixmap(self._icon, color, 20))
-        else:
-            self._icon_lbl.setText(self._icon)
-            self._icon_lbl.setStyleSheet(
-                f"font-size:16px;color:{color};background:transparent;")
         col = QVBoxLayout(); col.setContentsMargins(0, 0, 0, 0); col.setSpacing(0)
         self._lbl_text = QLabel(self._label)
         self._lbl_text.setStyleSheet(
@@ -226,6 +217,15 @@ class NavItem(QPushButton):
             self._sub_lbl = None
         h.addLayout(col, 1)
         h.addSpacing(8)
+
+    def _paint_icon(self, color):
+        """Render the icon as a recoloured SVG, or fall back to text/emoji."""
+        if icon_has(self._icon):
+            self._icon_lbl.setPixmap(icon_pixmap(self._icon, color, 20))
+        else:
+            self._icon_lbl.setText(self._icon)
+            self._icon_lbl.setStyleSheet(
+                f"font-size:16px;color:{color};background:transparent;")
 
     def setChecked(self, b: bool):
         super().setChecked(b)

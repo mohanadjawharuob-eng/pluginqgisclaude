@@ -161,45 +161,88 @@ check("dock.read_xlsx", test_read_xlsx)
 
 
 def test_no_undefined_names():
-    """Static scan: every Name loaded must be bound somewhere or a builtin.
+    """Per-function scope scan: every loaded Name must be bound in its own
+    function scope, an enclosing function, module scope, or be a builtin.
 
-    Catches the bug class that bit this plugin twice (QImage / QPagedPaintDevice
-    used without import) and any stray closure reference from refactors.
+    Catches: imports used without importing (QImage / QPagedPaintDevice), stray
+    closure refs from refactors, and a name bound in one method but used in
+    another (e.g. the `h` layout bug from the nav redesign — which the older
+    file-wide scan missed because `h` was bound in a *different* method).
     """
     import ast
     import builtins
-    known_builtins = set(dir(builtins)) | {
-        "__file__", "__name__", "__doc__", "__class__", "__qualname__"}
+    BI = set(dir(builtins)) | {"__file__", "__name__", "__doc__",
+                               "__class__", "__qualname__", "__package__"}
     pkg = os.path.join(PKG_PARENT, "arch_manager_v2")
-    problems = {}
-    for fn in sorted(f for f in os.listdir(pkg) if f.endswith(".py")):
-        tree = ast.parse(open(os.path.join(pkg, fn), encoding="utf-8").read())
-        bound = set()
-        for n in ast.walk(tree):
+    DEFS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+
+    def descend(node):
+        """Descendants of node, NOT entering nested def/class bodies."""
+        for child in ast.iter_child_nodes(node):
+            yield child
+            if not isinstance(child, DEFS):
+                yield from descend(child)
+
+    def body_walk(stmts):
+        """Nodes inside these statements, staying in one scope: nested def/class
+        nodes are yielded (for their names) but not descended into."""
+        for stmt in stmts:
+            yield stmt
+            if not isinstance(stmt, DEFS):
+                yield from descend(stmt)
+
+    def bound_of(stmts):
+        b = set()
+        for n in body_walk(stmts):
             if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
-                bound.add(n.id)
-            elif isinstance(n, ast.arg):
-                bound.add(n.arg)
-            elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                bound.add(n.name)
+                b.add(n.id)
+            elif isinstance(n, ast.arg):                 # lambda args
+                b.add(n.arg)
+            elif isinstance(n, DEFS):
+                b.add(n.name)
             elif isinstance(n, ast.Import):
                 for a in n.names:
-                    bound.add((a.asname or a.name).split(".")[0])
+                    b.add((a.asname or a.name).split(".")[0])
             elif isinstance(n, ast.ImportFrom):
                 for a in n.names:
-                    bound.add(a.asname or a.name)
+                    b.add(a.asname or a.name)
             elif isinstance(n, (ast.Global, ast.Nonlocal)):
-                bound.update(n.names)
+                b.update(n.names)
             elif isinstance(n, ast.ExceptHandler) and n.name:
-                bound.add(n.name)
-        known = bound | known_builtins
-        bad = {n.id: n.lineno for n in ast.walk(tree)
-               if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
-               and n.id not in known}
-        if bad:
-            problems[fn] = bad
-    assert not problems, f"undefined name references: {problems}"
-check("static: no undefined names", test_no_undefined_names)
+                b.add(n.name)
+        return b
+
+    problems = {}
+
+    def visit(node, enclosing, fname):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            b = bound_of(node.body)
+            a = node.args
+            for arg in a.posonlyargs + a.args + a.kwonlyargs:
+                b.add(arg.arg)
+            if a.vararg: b.add(a.vararg.arg)
+            if a.kwarg: b.add(a.kwarg.arg)
+            known = b | enclosing | BI
+            for n in body_walk(node.body):
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) \
+                        and n.id not in known:
+                    problems.setdefault(fname, set()).add((n.lineno, n.id))
+            inner = enclosing | b
+        else:                             # Module or ClassDef
+            inner = enclosing             # methods don't see class scope
+        # recurse only into *direct* nested scopes of this node
+        for n in body_walk(getattr(node, "body", [])):
+            if isinstance(n, DEFS):
+                visit(n, inner, fname)
+
+    for fn in sorted(f for f in os.listdir(pkg) if f.endswith(".py")):
+        tree = ast.parse(open(os.path.join(pkg, fn), encoding="utf-8").read())
+        visit(tree, bound_of(tree.body), fn)
+
+    assert not problems, "undefined name references:\n" + "\n".join(
+        f"  {f}: " + ", ".join(f"line {ln}: {nm}" for ln, nm in sorted(v))
+        for f, v in problems.items())
+check("static: no undefined names (scope-aware)", test_no_undefined_names)
 
 
 # ── Summary ──────────────────────────────────────────────────────────────────

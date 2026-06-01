@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 900" width="480" height="900">
+<style>
+  .bone { fill:#f0ede6; stroke:#2a1f0e; stroke-width:1.2; cursor:pointer; transition:fill 0.1s; }
+  .bone:hover { stroke:#1144cc; stroke-width:2; }
+  /* Status fills — applied by Python via element attribute or overlay */
+</style>
+<defs>
+  <!-- Hatching for crushed -->
+  <pattern id="hatch_crushed" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+    <line x1="0" y1="0" x2="0" y2="5" stroke="#333" stroke-width="1"/>
+  </pattern>
+</defs>
+
+<!-- ═══════════════ SKULL ═══════════════ -->
+<!-- Neurocranium (braincase) -->
+<ellipse id="b_neurocranium" class="bone" cx="240" cy="44" rx="46" ry="40" />
+<!-- Face -->
+<path id="b_face" class="bone" d="M210,78 Q220,72 240,72 Q260,72 270,78 L272,104 Q260,116 240,118 Q220,116 208,104 Z"/>
+<!-- Mandible -->
+<path id="b_mandible" class="bone" d="M214,118 Q218,130 220,138 Q228,144 240,144 Q252,144 260,138 Q262,130 266,118 Q253,122 240,122 Q227,122 214,118 Z"/>
+<!-- Teeth upper (represented as row) -->
+<rect id="b_teeth_upper" class="bone" x="218" y="108" width="44" height="6" rx="2"/>
+<!-- Teeth lower -->
+<rect id="b_teeth_lower" class="bone" x="220" y="136" width="40" height="6" rx="2"/>
+
+<!-- ═══════════════ CERVICAL VERTEBRAE ═══════════════ -->
+<rect id="b_c1" class="bone" x="228" y="150" width="24" height="9" rx="3"/>
+<rect id="b_c2" class="bone" x="228" y="161" width="24" height="9" rx="3"/>
+<rect id="b_c3" class="bone" x="228" y="172" width="24" height="9" rx="3"/>
+<rect id="b_c4" class="bone" x="228" y="183" width="24" height="9" rx="3"/>
+<rect id="b_c5" class="bone" x="228" y="194" width="24" height="9" rx="3"/>
+<rect id="b_c6" class="bone" x="228" y="205" width="24" height="9" rx="3"/>
+<rect id="b_c7" class="bone" x="228" y="216" width="24" height="9" rx="3"/>
+
+<!-- ═══════════════ CLAVICLES ═══════════════ -->
+<path id="b_clavicle_r" class="bone" d="M228,158 Q200,154 170,162 Q168,164 170,166 Q200,158 228,162 Z"/>
+<path id="b_clavicle_l" class="bone" d="M252,158 Q280,154 310,162 Q312,164 310,166 Q280,158 252,162 Z"/>
+
+<!-- ═══════════════ SCAPULAE ═══════════════ -->
+<path id="b_scapula_r" class="bone" d="M148,170 L170,162 L172,222 Q160,228 148,220 Z"/>
+<path id="b_scapula_l" class="bone" d="M332,170 L310,162 L308,222 Q320,228 332,220 Z"/>
+
+<!-- ═══════════════ STERNUM ═══════════════ -->
+<rect id="b_sternum_manubrium" class="bone" x="228" y="228" width="24" height="20" rx="3"/>
+<rect id="b_sternum_body" class="bone" x="230" y="250" width="20" height="50" rx="3"/>
+<path id="b_xiphoid" class="bone" d="M235,300 L245,300 L240,312 Z"/>
+
+<!-- ═══════════════ THORACIC VERTEBRAE ═══════════════ -->
+<rect id="b_t1" class="bone" x="227" y="228" width="26" height="10" rx="2"/>
+<rect id="b_t2" class="bone" x="227" y="240" width="26" height="10" rx="2"/>
+<rect id="b_t3" class="bone" x="227" y="252" width="26" height="10" rx="2"/>
+<rect id="b_t4" class="bone" x="227" y="264" width="26" height="10" rx="2"/>
+<rect id="b_t5" class="bone" x="227" y="276" width="26" height="10" rx="2"/>
+<rect id="b_t6" class="bone" x="227" y="288" width="26" height="10" rx="2"/>
+<rect id="b_t7" class="bone" x="227" y="300" width="26" height="10" rx="2"/>
+<rect id="b_t8" class="bone" x="227" y="312" width="26" height="10" rx="2"/>
+<rect id="b_t9" class="bone" x="227" y="324" width="26" height="10" rx="2"/>
+<rect id="b_t10" class="bone" x="227" y="336" width="26" height="10" rx="2"/>
+<rect id="b_t11" class="bone" x="227" y="348" width="26" height="10" rx="2"/>
+<rect id="b_t12" class="bone" x="227" y="360" width="26" height="10" rx="2"/>
+
+<!-- ═══════════════ RIBS (each as arc path) ═══════════════ -->
+<!-- Right ribs (anatomical left on screen = right side) -->
+<path id="b_rib_r_1"  class="bone" d="M227,233 Q196,226 172,234 Q170,236 172,238 Q196,230 227,237 Z"/>
+<path id="b_rib_r_2"  class="bone" d="M227,245 Q192,236 165,246 Q163,248 165,250 Q192,240 227,249 Z"/>
+<path id="b_rib_r_3"  class="bone" d="M227,257 Q188,246 160,258 Q158,260 160,262 Q188,250 227,261 Z"/>
+<path id="b_rib_r_4"  class="bone" d="M227,269 Q186,256 158,270 Q156,272 158,274 Q186,260 227,273 Z"/>
+<path id="b_rib_r_5"  class="bone" d="M227,281 Q184,267 157,282 Q155,284 157,286 Q184,271 227,285 Z"/>
+<path id="b_rib_r_6"  class="bone" d="M227,293 Q183,278 157,294 Q155,296 157,298 Q183,282 227,297 Z"/>
+<path id="b_rib_r_7"  class="bone" d="M227,305 Q182,290 158,306 Q156,308 158,310 Q182,294 227,309 Z"/>
+<path id="b_rib_r_8"  class="bone" d="M227,317 Q180,302 160,318 Q158,320 160,322 Q180,306 227,321 Z"/>
+<path id="b_rib_r_9"  class="bone" d="M227,329 Q181,315 162,330 Q160,332 162,334 Q181,319 227,333 Z"/>
+<path id="b_rib_r_10" class="bone" d="M227,341 Q182,327 163,342 Q161,344 163,346 Q182,331 227,345 Z"/>
+<path id="b_rib_r_11" class="bone" d="M227,353 Q186,342 168,354 Q166,356 168,358 Q186,346 227,357 Z"/>
+<path id="b_rib_r_12" class="bone" d="M227,365 Q192,358 175,366 Q174,368 175,370 Q192,362 227,369 Z"/>
+<!-- Left ribs -->
+<path id="b_rib_l_1"  class="bone" d="M253,233 Q284,226 308,234 Q310,236 308,238 Q284,230 253,237 Z"/>
+<path id="b_rib_l_2"  class="bone" d="M253,245 Q288,236 315,246 Q317,248 315,250 Q288,240 253,249 Z"/>
+<path id="b_rib_l_3"  class="bone" d="M253,257 Q292,246 320,258 Q322,260 320,262 Q292,250 253,261 Z"/>
+<path id="b_rib_l_4"  class="bone" d="M253,269 Q294,256 322,270 Q324,272 322,274 Q294,260 253,273 Z"/>
+<path id="b_rib_l_5"  class="bone" d="M253,281 Q296,267 323,282 Q325,284 323,286 Q296,271 253,285 Z"/>
+<path id="b_rib_l_6"  class="bone" d="M253,293 Q297,278 323,294 Q325,296 323,298 Q297,282 253,297 Z"/>
+<path id="b_rib_l_7"  class="bone" d="M253,305 Q298,290 322,306 Q324,308 322,310 Q298,294 253,309 Z"/>
+<path id="b_rib_l_8"  class="bone" d="M253,317 Q300,302 320,318 Q322,320 320,322 Q300,306 253,321 Z"/>
+<path id="b_rib_l_9"  class="bone" d="M253,329 Q299,315 318,330 Q320,332 318,334 Q299,319 253,333 Z"/>
+<path id="b_rib_l_10" class="bone" d="M253,341 Q298,327 317,342 Q319,344 317,346 Q298,331 253,345 Z"/>
+<path id="b_rib_l_11" class="bone" d="M253,353 Q294,342 312,354 Q314,356 312,358 Q294,346 253,357 Z"/>
+<path id="b_rib_l_12" class="bone" d="M253,365 Q288,358 305,366 Q306,368 305,370 Q288,362 253,369 Z"/>
+
+<!-- ═══════════════ LUMBAR VERTEBRAE ═══════════════ -->
+<rect id="b_l1" class="bone" x="224" y="372" width="32" height="13" rx="3"/>
+<rect id="b_l2" class="bone" x="224" y="387" width="32" height="13" rx="3"/>
+<rect id="b_l3" class="bone" x="224" y="402" width="32" height="13" rx="3"/>
+<rect id="b_l4" class="bone" x="224" y="417" width="32" height="13" rx="3"/>
+<rect id="b_l5" class="bone" x="224" y="432" width="32" height="13" rx="3"/>
+
+<!-- ═══════════════ SACRUM + COCCYX ═══════════════ -->
+<path id="b_sacrum" class="bone" d="M218,446 L262,446 L258,490 Q250,496 240,497 Q230,496 222,490 Z"/>
+<path id="b_coccyx" class="bone" d="M232,496 Q240,500 248,496 L245,516 Q240,520 235,516 Z"/>
+
+<!-- ═══════════════ OS COXAE ═══════════════ -->
+<!-- Right -->
+<path id="b_ilium_r" class="bone" d="M218,446 Q190,440 164,452 Q152,468 158,490 Q168,504 184,506 Q196,504 208,496 L218,490 Z"/>
+<path id="b_ischium_r" class="bone" d="M184,506 Q172,514 168,530 Q166,544 172,554 Q180,560 190,556 Q200,548 204,536 Q208,522 208,506 Z"/>
+<path id="b_pubis_r" class="bone" d="M208,506 Q218,510 226,510 L226,530 Q218,532 210,530 Q202,522 204,514 Z"/>
+<!-- Left -->
+<path id="b_ilium_l" class="bone" d="M262,446 Q290,440 316,452 Q328,468 322,490 Q312,504 296,506 Q284,504 272,496 L262,490 Z"/>
+<path id="b_ischium_l" class="bone" d="M296,506 Q308,514 312,530 Q314,544 308,554 Q300,560 290,556 Q280,548 276,536 Q272,522 272,506 Z"/>
+<path id="b_pubis_l" class="bone" d="M272,506 Q262,510 254,510 L254,530 Q262,532 270,530 Q278,522 276,514 Z"/>
+
+<!-- ═══════════════ UPPER LIMB RIGHT ═══════════════ -->
+<!-- Humerus R -->
+<ellipse id="b_humerus_r_px" class="bone" cx="152" cy="190" rx="14" ry="12"/>
+<rect    id="b_humerus_r_in" class="bone" x="144" y="198" width="16" height="90" rx="6"/>
+<ellipse id="b_humerus_r_di" class="bone" cx="152" cy="296" rx="16" ry="10"/>
+<!-- Radius R -->
+<rect id="b_radius_r_px" class="bone" x="134" y="310" width="10" height="14" rx="4"/>
+<rect id="b_radius_r_in" class="bone" x="135" y="322" width="9" height="72" rx="4"/>
+<rect id="b_radius_r_di" class="bone" x="132" y="393" width="14" height="10" rx="4"/>
+<!-- Ulna R -->
+<rect id="b_ulna_r_px" class="bone" x="150" y="306" width="10" height="18" rx="4"/>
+<rect id="b_ulna_r_in" class="bone" x="151" y="322" width="8" height="72" rx="4"/>
+<rect id="b_ulna_r_di" class="bone" x="148" y="393" width="12" height="10" rx="4"/>
+<!-- Carpals R -->
+<rect id="b_carpals_r" class="bone" x="127" y="406" width="38" height="16" rx="4"/>
+<!-- Metacarpals R -->
+<rect id="b_metacarpals_r" class="bone" x="122" y="424" width="44" height="28" rx="3"/>
+<!-- Phalanges Hand R -->
+<rect id="b_ph_hand_r_px" class="bone" x="120" y="454" width="46" height="12" rx="3"/>
+<rect id="b_ph_hand_r_in" class="bone" x="120" y="468" width="46" height="11" rx="3"/>
+<rect id="b_ph_hand_r_di" class="bone" x="120" y="481" width="46" height="10" rx="3"/>
+
+<!-- ═══════════════ UPPER LIMB LEFT ═══════════════ -->
+<!-- Humerus L -->
+<ellipse id="b_humerus_l_px" class="bone" cx="328" cy="190" rx="14" ry="12"/>
+<rect    id="b_humerus_l_in" class="bone" x="320" y="198" width="16" height="90" rx="6"/>
+<ellipse id="b_humerus_l_di" class="bone" cx="328" cy="296" rx="16" ry="10"/>
+<!-- Radius L -->
+<rect id="b_radius_l_px" class="bone" x="336" y="310" width="10" height="14" rx="4"/>
+<rect id="b_radius_l_in" class="bone" x="336" y="322" width="9" height="72" rx="4"/>
+<rect id="b_radius_l_di" class="bone" x="334" y="393" width="14" height="10" rx="4"/>
+<!-- Ulna L -->
+<rect id="b_ulna_l_px" class="bone" x="320" y="306" width="10" height="18" rx="4"/>
+<rect id="b_ulna_l_in" class="bone" x="321" y="322" width="8" height="72" rx="4"/>
+<rect id="b_ulna_l_di" class="bone" x="320" y="393" width="12" height="10" rx="4"/>
+<!-- Carpals L -->
+<rect id="b_carpals_l" class="bone" x="315" y="406" width="38" height="16" rx="4"/>
+<!-- Metacarpals L -->
+<rect id="b_metacarpals_l" class="bone" x="314" y="424" width="44" height="28" rx="3"/>
+<!-- Phalanges Hand L -->
+<rect id="b_ph_hand_l_px" class="bone" x="314" y="454" width="46" height="12" rx="3"/>
+<rect id="b_ph_hand_l_in" class="bone" x="314" y="468" width="46" height="11" rx="3"/>
+<rect id="b_ph_hand_l_di" class="bone" x="314" y="481" width="46" height="10" rx="3"/>
+
+<!-- ═══════════════ LOWER LIMB RIGHT ═══════════════ -->
+<!-- Femur R -->
+<path id="b_femur_r_px" class="bone" d="M184,556 Q192,540 198,530 Q204,518 204,510 Q200,508 196,510 Q190,520 184,534 Q180,546 180,556 Z"/>
+<rect id="b_femur_r_in" class="bone" x="181" y="556" width="18" height="120" rx="7"/>
+<ellipse id="b_femur_r_di" class="bone" cx="190" cy="685" rx="20" ry="12"/>
+<!-- Patella R -->
+<ellipse id="b_patella_r" class="bone" cx="190" cy="700" rx="10" ry="9"/>
+<!-- Tibia R -->
+<ellipse id="b_tibia_r_px" class="bone" cx="190" cy="718" rx="18" ry="10"/>
+<rect    id="b_tibia_r_in" class="bone" x="183" y="726" width="14" height="100" rx="5"/>
+<rect    id="b_tibia_r_di" class="bone" x="180" y="825" width="20" height="12" rx="4"/>
+<!-- Fibula R -->
+<rect id="b_fibula_r_px" class="bone" x="200" y="720" width="8" height="12" rx="3"/>
+<rect id="b_fibula_r_in" class="bone" x="201" y="730" width="7" height="96" rx="3"/>
+<rect id="b_fibula_r_di" class="bone" x="198" y="825" width="12" height="10" rx="3"/>
+<!-- Tarsals R -->
+<rect id="b_tarsals_r" class="bone" x="174" y="838" width="44" height="22" rx="4"/>
+<!-- Metatarsals R -->
+<rect id="b_metatarsals_r" class="bone" x="168" y="861" width="52" height="20" rx="3"/>
+<!-- Phalanges Foot R -->
+<rect id="b_ph_foot_r_px" class="bone" x="166" y="882" width="54" height="10" rx="3"/>
+<rect id="b_ph_foot_r_in" class="bone" x="166" y="894" width="54" height="9"  rx="3"/>
+<rect id="b_ph_foot_r_di" class="bone" x="166" y="905" width="54" height="8"  rx="3"/>
+
+<!-- ═══════════════ LOWER LIMB LEFT ═══════════════ -->
+<!-- Femur L -->
+<path id="b_femur_l_px" class="bone" d="M296,556 Q288,540 282,530 Q276,518 276,510 Q280,508 284,510 Q290,520 296,534 Q300,546 300,556 Z"/>
+<rect id="b_femur_l_in" class="bone" x="281" y="556" width="18" height="120" rx="7"/>
+<ellipse id="b_femur_l_di" class="bone" cx="290" cy="685" rx="20" ry="12"/>
+<!-- Patella L -->
+<ellipse id="b_patella_l" class="bone" cx="290" cy="700" rx="10" ry="9"/>
+<!-- Tibia L -->
+<ellipse id="b_tibia_l_px" class="bone" cx="290" cy="718" rx="18" ry="10"/>
+<rect    id="b_tibia_l_in" class="bone" x="283" y="726" width="14" height="100" rx="5"/>
+<rect    id="b_tibia_l_di" class="bone" x="280" y="825" width="20" height="12" rx="4"/>
+<!-- Fibula L -->
+<rect id="b_fibula_l_px" class="bone" x="272" y="720" width="8" height="12" rx="3"/>
+<rect id="b_fibula_l_in" class="bone" x="272" y="730" width="7" height="96" rx="3"/>
+<rect id="b_fibula_l_di" class="bone" x="270" y="825" width="12" height="10" rx="3"/>
+<!-- Tarsals L -->
+<rect id="b_tarsals_l" class="bone" x="262" y="838" width="44" height="22" rx="4"/>
+<!-- Metatarsals L -->
+<rect id="b_metatarsals_l" class="bone" x="260" y="861" width="52" height="20" rx="3"/>
+<!-- Phalanges Foot L -->
+<rect id="b_ph_foot_l_px" class="bone" x="260" y="882" width="54" height="10" rx="3"/>
+<rect id="b_ph_foot_l_in" class="bone" x="260" y="894" width="54" height="9"  rx="3"/>
+<rect id="b_ph_foot_l_di" class="bone" x="260" y="905" width="54" height="8"  rx="3"/>
+
+<!-- ═══════════════ LABELS ═══════════════ -->
+<g style="font-family:Arial;font-size:7px;fill:#555;pointer-events:none;">
+  <text x="245" y="48">Cranium</text>
+  <text x="100" y="192">Humerus R</text>
+  <text x="336" y="192">Humerus L</text>
+  <text x="10" y="355">Radius/Ulna R</text>
+  <text x="346" y="355">Radius/Ulna L</text>
+  <text x="232" y="160">C1–C7</text>
+  <text x="230" y="298">T1–T12</text>
+  <text x="232" y="415">L1–L5</text>
+  <text x="230" y="472">Sacrum</text>
+  <text x="135" y="620">Femur R</text>
+  <text x="296" y="620">Femur L</text>
+  <text x="6" y="780">R</text>
+  <text x="466" y="780">L</text>
+</g>
+</svg>

@@ -1,0 +1,11 @@
+[general]
+name=Archaeological Manager
+description=Harris Matrix, context data, pottery, artifacts and skeleton sheets — all linked by context number. Reads your existing QGIS layers directly.
+version=1.0
+qgisMinimumVersion=3.22
+author=Mohannad
+email=
+homepage=
+tracker=
+repository=
+hasProcessingProvider=no

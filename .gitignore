@@ -1,0 +1,11 @@
+# Build artifacts
+*.zip
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Plugin runtime/user data (written into the plugin dir at runtime)
+.user_config.json
+.site_photos.json
+user_sheets/

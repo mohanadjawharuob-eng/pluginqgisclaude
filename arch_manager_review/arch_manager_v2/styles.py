@@ -963,6 +963,7 @@ QLabel#muted    {{ font-size:11px; color:{c['text_dim']};   background:transpare
 QLabel#mutedXs  {{ font-size:10px; color:{c['text_dim']};   background:transparent; }}
 QLabel#mutedSm  {{ font-size:10px; color:{c['text_muted']}; background:transparent; }}
 QLabel#bodyText {{ font-size:11px; color:{c['text']};       background:transparent; }}
+QLabel#formLabel {{ font-size:10px; color:{c['text']};      background:transparent; }}
 QLabel#accentLabel {{ font-size:12px; font-weight:600; color:{c['accent']}; background:transparent; }}
 
 /* ── Small framed elements ───────────────────────────────────────────── */

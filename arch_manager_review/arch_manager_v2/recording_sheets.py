@@ -403,8 +403,7 @@ class SheetForm(QWidget):
 
         # Header bar
         hdr = QFrame()
-        hdr.setStyleSheet(
-            f"background:#1e1e1e;border-radius:3px;padding:6px;")
+        hdr.setObjectName("cardHeader")
         hl = QHBoxLayout(hdr); hl.setContentsMargins(8,4,8,4)
         title = QLabel(f"{self.schema.get('icon','📋')}  "
                        f"<b style='color:{CLR['accent_gold']};font-size:13px;'>"
@@ -412,7 +411,7 @@ class SheetForm(QWidget):
         hl.addWidget(title); hl.addStretch()
 
         customize_btn = QPushButton("⚙ Customize fields")
-        customize_btn.setStyleSheet(btn_style('#3a3000', '#5a4a00'))
+        customize_btn.setObjectName("btn_secondary")
         customize_btn.clicked.connect(self._customize_clicked)
         hl.addWidget(customize_btn)
         outer.addWidget(hdr)
@@ -420,9 +419,9 @@ class SheetForm(QWidget):
         # Scroll area for form fields
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(f"QScrollArea{{border:none;background:{CLR['bg_content']};}}")
+        scroll.setStyleSheet("QScrollArea{border:none;background:transparent;}")
         form_w = QWidget()
-        form_w.setStyleSheet(f"background:{CLR['bg_white']};")
+        form_w.setStyleSheet("background:transparent;")
         self._form_layout = QFormLayout(form_w)
         self._form_layout.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._form_layout.setFormAlignment(Qt.AlignLeft | Qt.AlignTop)
@@ -435,12 +434,12 @@ class SheetForm(QWidget):
         # Save bar
         bar = QHBoxLayout()
         clear_btn = QPushButton("🗑 Clear form")
-        clear_btn.setStyleSheet(btn_style('#3a3a3a', '#4a4a4a'))
+        clear_btn.setObjectName("btn_secondary")
         clear_btn.clicked.connect(self.clear)
         bar.addWidget(clear_btn)
         bar.addStretch()
         save_btn = QPushButton("💾 Save record")
-        save_btn.setStyleSheet(btn_style(CLR['accent_green'], '#5a9a5a', tall=True))
+        save_btn.setObjectName("btn_primary")
         save_btn.clicked.connect(self._save_clicked)
         bar.addWidget(save_btn)
         outer.addLayout(bar)
@@ -457,7 +456,7 @@ class SheetForm(QWidget):
             if f.get("required"):
                 label_text += " *"
             lbl = QLabel(label_text)
-            lbl.setStyleSheet("font-size:10px;color:#222;")
+            lbl.setObjectName("formLabel")
             w = self._make_widget(f)
             self._form_layout.addRow(lbl, w)
             self._widgets[f["name"]] = (w, f["type"])
@@ -691,7 +690,7 @@ class RecordingSheetsTab(QWidget):
 
         # Top action bar
         bar = QFrame()
-        bar.setStyleSheet(f"background:#1e1e1e;border-bottom:1px solid {CLR['accent_gold']};")
+        bar.setObjectName("actionBar")
         hl = QHBoxLayout(bar); hl.setContentsMargins(10, 6, 10, 6)
         title = QLabel(f"<b style='color:{CLR['accent_gold']};font-size:13px;'>"
                        f"📋  Recording Sheets</b>"
@@ -700,17 +699,15 @@ class RecordingSheetsTab(QWidget):
         hl.addWidget(title); hl.addStretch()
 
         add_btn = QPushButton("＋ New sheet type…")
-        add_btn.setStyleSheet(btn_style(CLR['accent_green'], '#5a9a5a'))
+        add_btn.setObjectName("btn_primary")
         add_btn.setToolTip("Create a new custom recording sheet type")
         add_btn.clicked.connect(self._add_sheet_type)
         hl.addWidget(add_btn)
         vl.addWidget(bar)
 
-        # Sub-tab widget
+        # Sub-tab widget (themed via the app-wide #subTabs QSS)
         self._tabs = QTabWidget()
-        self._tabs.setStyleSheet(
-            "QTabBar::tab{padding:6px 14px;font-size:10px;}"
-            "QTabBar::tab:selected{font-weight:bold;}")
+        self._tabs.setObjectName("subTabs")
         vl.addWidget(self._tabs, 1)
 
         # Add a tab for each available sheet

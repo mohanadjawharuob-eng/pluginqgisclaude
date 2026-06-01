@@ -3,6 +3,7 @@ Archaeological Manager dock.py v5
 Refactored: logic split into data_manager.py, styles.py, widgets.py, harris_view.py
 """
 import json, csv, zipfile, os, re
+import shutil, datetime
 import xml.etree.ElementTree as ET
 from functools import partial
 
@@ -370,7 +371,1109 @@ class LoginDialog(QDialog):
 
 
 # ── Main window ───────────────────────────────────────────────────────────────
-class ArchWindow(QMainWindow):
+class _HistoryAndTabsMixin:
+    """Edit-history logging plus Drawings/Media/Stats/Timeline/History tabs."""
+
+    # ── Helpers ──────────────────────────────────────────────────────────────
+    def _log_history(self, action, table_name, record_id, details=""):
+        """Write one row to edit_history — also keeps in-memory fallback."""
+        import datetime as _dt
+        ts=_dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        user=getattr(self,'_current_user','?')
+        if not hasattr(self,'_mem_history'): self._mem_history=[]
+        self._mem_history.append([ts,user,action,f"{table_name} #{record_id}: {str(details)[:60]}"])
+        if len(self._mem_history)>500: self._mem_history=self._mem_history[-500:]
+        hlyr = self._lyr(self.hist_layer_cb) if hasattr(self,'hist_layer_cb') else None
+        if not hlyr: return
+        from qgis.core import QgsFeature
+        fields = hlyr.fields()
+        feat = QgsFeature(fields)
+        feat.setAttribute('timestamp', datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        feat.setAttribute('user_name', getattr(self,'_current_user','?'))
+        feat.setAttribute('action', action)
+        feat.setAttribute('table_name', table_name)
+        feat.setAttribute('record_id', str(record_id))
+        feat.setAttribute('details', str(details)[:500])
+        hlyr.startEditing(); hlyr.addFeature(feat); hlyr.commitChanges()
+
+    # Patch _write_feat to log history
+    def _write_feat(self, lyr, vals, fid=None):
+        self._write_feat_base(lyr, vals, fid=fid)
+        try:
+            action = 'edit' if fid is not None else 'add'
+            self._log_history(action, lyr.name(), fid or 'new', str(vals)[:200])
+        except Exception: pass
+
+    # Patch _delete_rows to log history
+    def _delete_rows(self, tbl, lyr, pfx):
+        rows=tbl.selectionModel().selectedRows()
+        fids=tbl.property("_fids") or []
+        to_del=[fids[r.row()] for r in rows if r.row()<len(fids)]
+        self._delete_rows_base(tbl, lyr, pfx)
+        try:
+            for fid in to_del:
+                self._log_history('delete', lyr.name(), fid, '')
+        except Exception: pass
+
+    # ── Drawings tab ─────────────────────────────────────────────────────────
+    def _build_drawings_tab(self):
+        from qgis.PyQt.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QComboBox,QTableWidget,QTableWidgetItem,QAbstractItemView,QHeaderView,QFileDialog
+        w=QWidget(); vl=QVBoxLayout(w)
+        # Filter
+        fr=QHBoxLayout(); fr.addWidget(QLabel("Context #:"))
+        self.draw_filter=QComboBox(); self.draw_filter.setEditable(True); self.draw_filter.addItem("All")
+        show=QPushButton("Show"); show.setObjectName("btn_secondary"); show.clicked.connect(self._reload_drawings)
+        add=QPushButton("+ Attach drawing"); add.setObjectName("btn_primary"); add.clicked.connect(self._add_drawing)
+        cad_btn=QPushButton("📐 Import CAD/DXF…"); cad_btn.setObjectName("btn_secondary"); cad_btn.clicked.connect(self._import_cad_drawing)
+        edit=QPushButton("✏ Edit"); edit.setObjectName("btn_secondary"); edit.clicked.connect(self._edit_drawing)
+        open_btn=QPushButton("📂 Open file"); open_btn.setObjectName("btn_secondary"); open_btn.clicked.connect(self._open_drawing_file)
+        del_btn=QPushButton("🗑 Delete"); del_btn.setObjectName("btn_danger")
+        del_btn.clicked.connect(lambda:self._delete_rows(self.draw_tbl,self._lyr(self.draw_layer_cb),'draw'))
+        addcol=QPushButton("＋ Col"); addcol.setObjectName("btn_ghost"); addcol.clicked.connect(lambda:self._add_field(self._lyr(self.draw_layer_cb)))
+        for b in [self.draw_filter,show,add,cad_btn,edit,open_btn,del_btn,addcol]: fr.addWidget(b)
+        vl.addLayout(fr)
+        self.draw_tbl=self._mktbl(); vl.addWidget(self.draw_tbl,1)
+        return w
+
+    def _reload_drawings(self, *a):
+        lyr=self._lyr(self.draw_layer_cb)
+        if not lyr: self.draw_tbl.setRowCount(0); return
+        flt=self.draw_filter.currentText()
+        fnames=[f.name() for f in lyr.fields()]
+        self.draw_tbl.setColumnCount(len(fnames)); self.draw_tbl.setHorizontalHeaderLabels(fnames)
+        feats=[]
+        for feat in lyr.getFeatures():
+            try:
+                if flt!="All":
+                    v=feat.attribute('context_num')
+                    if str(v)!=flt: continue
+            except: pass
+            feats.append(feat)
+        self.draw_tbl.setRowCount(len(feats)); self.draw_tbl.setProperty("_fids",[f.id() for f in feats])
+        for ri,feat in enumerate(feats):
+            for ci,fn in enumerate(fnames):
+                v=feat.attribute(fn)
+                self.draw_tbl.setItem(ri,ci,QTableWidgetItem(str(v) if v is not None else ''))
+
+    def _add_drawing(self):
+        lyr=self._lyr(self.draw_layer_cb)
+        if not lyr: QMessageBox.warning(self,"","Set drawings layer first."); return
+        path,_=QFileDialog.getOpenFileName(self,"Attach drawing","","All files (*.*)")
+        if not path: return
+        defaults={'file_path':path,'context_num':self.draw_filter.currentText() if self.draw_filter.currentText()!="All" else ''}
+        dlg=RecordDialog(self._schema_for(lyr),defaults=defaults,title="Attach Drawing",parent=self)
+        if dlg.exec_()!=QDialog.Accepted: return
+        self._write_feat(lyr,dlg.values()); self._reload_drawings()
+
+    def _edit_drawing(self):
+        self._edit_row('draw')
+
+    # patch _edit_row to handle 'draw'
+    def _edit_row_ext_impl(self, pfx):
+        if pfx=='draw':
+            tbl=self.draw_tbl; lyr=self._lyr(self.draw_layer_cb)
+            if not lyr: return
+            rows=tbl.selectionModel().selectedRows()
+            if not rows: QMessageBox.information(self,"","Select a row first."); return
+            ri=rows[0].row(); fids=tbl.property("_fids") or []
+            if ri>=len(fids): return
+            fid=fids[ri]; feat=lyr.getFeature(fid)
+            defs={f.name():feat.attribute(f.name()) for f in lyr.fields()}
+            dlg=RecordDialog(self._schema_for(lyr),defaults=defs,title="Edit Drawing",parent=self)
+            if dlg.exec_()!=QDialog.Accepted: return
+            self._write_feat(lyr,dlg.values(),fid=fid); self._reload_drawings()
+        else: self._edit_row_base(pfx)
+
+    def _open_drawing_file(self):
+        rows=self.draw_tbl.selectionModel().selectedRows()
+        if not rows: return
+        ri=rows[0].row(); lyr=self._lyr(self.draw_layer_cb)
+        if not lyr: return
+        fids=self.draw_tbl.property("_fids") or []
+        if ri>=len(fids): return
+        feat=lyr.getFeature(fids[ri])
+        try: path=str(feat.attribute('file_path') or '')
+        except: path=''
+        if path and os.path.exists(path):
+            import subprocess
+            subprocess.Popen(['explorer' if os.name=='nt' else 'xdg-open', path])
+        else:
+            QMessageBox.warning(self,"","File not found: "+path)
+
+    # ── CAD import ───────────────────────────────────────────────────────────
+    def _import_cad_drawing(self):
+        import datetime as _dt
+        from qgis.PyQt.QtWidgets import QFileDialog, QInputDialog, QMessageBox
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import CAD / DXF Drawing", "",
+            "CAD Files (*.dxf *.dwg *.dgn *.plt);;All files (*.*)")
+        if not path: return
+        lyr = self._lyr(self.draw_layer_cb)
+        if not lyr:
+            QMessageBox.warning(self, "No drawings layer",
+                "Connect a site first so the drawings layer is available.")
+            return
+        ctx_text, ok = QInputDialog.getText(
+            self, "Context number",
+            "Context number this drawing belongs to\n(leave blank if not applicable):")
+        ctx_num = ctx_text.strip() if ok else ''
+        scale_text, ok2 = QInputDialog.getText(
+            self, "Scale",
+            "Drawing scale (e.g. 1:20 — leave blank if unknown):")
+        scale = scale_text.strip() if ok2 else ''
+        today = _dt.date.today().isoformat()
+        vals = {
+            'drawing_type': 'CAD',
+            'file_path': path,
+            'context_num': ctx_num,
+            'scale': scale,
+            'notes': '',
+            'date_recorded': today,
+        }
+        try:
+            self._write_feat(lyr, vals)
+            self._reload_drawings()
+            try: self._log_history('import_cad', os.path.basename(path), 0, f"context {ctx_num or 'N/A'}")
+            except: pass
+            if path.lower().endswith('.dxf'):
+                from qgis.core import QgsVectorLayer, QgsProject
+                vlyr = QgsVectorLayer(path, os.path.splitext(os.path.basename(path))[0], 'ogr')
+                if vlyr.isValid():
+                    QgsProject.instance().addMapLayer(vlyr)
+                    self._msg(f"CAD drawing imported and loaded: {os.path.basename(path)}")
+                else:
+                    self._msg(f"CAD drawing recorded: {os.path.basename(path)}")
+            else:
+                self._msg(f"CAD drawing recorded: {os.path.basename(path)}")
+        except Exception as e:
+            QMessageBox.critical(self, "Import error", str(e))
+
+    # ── Gallery persistence ──────────────────────────────────────────────────
+    def _get_media_json_path(self):
+        for cb_name in ['ctx_layer_cb', 'hist_layer_cb', 'pot_layer_cb']:
+            cb = getattr(self, cb_name, None)
+            if cb is None: continue
+            lyr = self._lyr(cb)
+            if not lyr: continue
+            src = lyr.dataProvider().dataSourceUri()
+            gpkg = src.split('|')[0]
+            if gpkg.endswith('.gpkg') and os.path.exists(gpkg):
+                return gpkg + '.media.json'
+        return None
+
+    def _save_gallery_registry(self):
+        path = self._get_media_json_path()
+        if not path: return
+        try:
+            import json
+            if not hasattr(self, '_photo_registry'):
+                self._photo_registry = {}
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(self._photo_registry, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _load_gallery_registry(self):
+        path = self._get_media_json_path()
+        if not path or not os.path.exists(path): return
+        try:
+            import json
+            with open(path, 'r', encoding='utf-8') as f:
+                reg = json.load(f)
+        except Exception:
+            return
+        if not isinstance(reg, dict): return
+        self._photo_registry = reg
+        from qgis.PyQt.QtWidgets import QListWidgetItem, QLabel
+        from qgis.PyQt.QtGui import QPixmap, QIcon
+        from qgis.PyQt.QtCore import Qt as _Qt
+        galleries = getattr(self, '_gallery_widgets', {})
+        for category, items in reg.items():
+            gallery = galleries.get(category)
+            if gallery is None: continue
+            gallery.clear()
+            files = []
+            for entry in items:
+                fpath = entry.get('path', '')
+                caption = entry.get('caption', os.path.basename(fpath) if fpath else '')
+                context = entry.get('context', '')
+                files.append(fpath)
+                item = QListWidgetItem()
+                display = f"{caption}\n📍 Context {context}" if context else caption
+                item.setText(display)
+                item.setToolTip(fpath + (f"\n📍 Context {context}" if context else ''))
+                px = QPixmap(fpath)
+                if not px.isNull():
+                    item.setIcon(QIcon(px.scaled(120, 90, _Qt.KeepAspectRatio, _Qt.SmoothTransformation)))
+                else:
+                    icon_lbl = "📄" if fpath.lower().endswith(('.pdf', '.docx', '.xlsx')) else "📐"
+                    item.setText(f"{icon_lbl}\n{display}")
+                gallery.addItem(item)
+            gallery.setProperty("_files", files)
+            parent = gallery.parent()
+            if parent:
+                for lbl in parent.findChildren(QLabel, "statusMsg"):
+                    lbl.setText(f"{len(files)} file(s) attached" if files else
+                                "No files added — click ＋ Add file to attach photos")
+                    break
+
+    # ── Statistics tab ────────────────────────────────────────────────────────
+    def _build_stats_tab(self):
+        from qgis.PyQt.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
+                                          QPushButton, QScrollArea, QLabel, QFrame)
+        w = QWidget(); w.setStyleSheet("background:transparent;")
+        vl = QVBoxLayout(w); vl.setContentsMargins(0, 0, 0, 0); vl.setSpacing(0)
+
+        vl.addWidget(ContentTitle("Statistics",
+                                  "Record counts and distributions across context types, periods and find categories"))
+
+        ab = QWidget(); ab.setObjectName("actionBar")
+        hdr = QHBoxLayout(ab); hdr.setContentsMargins(24, 6, 24, 6); hdr.setSpacing(8)
+        refresh = QPushButton("↻ Refresh statistics"); refresh.setObjectName("btn_secondary")
+        refresh.clicked.connect(self._refresh_stats)
+        hdr.addWidget(refresh); hdr.addStretch()
+        vl.addWidget(ab)
+
+        self._stats_scroll = QScrollArea()
+        self._stats_scroll.setWidgetResizable(True)
+        self._stats_scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        self._stats_inner = QWidget(); self._stats_inner.setStyleSheet("background:transparent;")
+        self._stats_vl = QVBoxLayout(self._stats_inner)
+        self._stats_vl.setContentsMargins(32, 20, 32, 32); self._stats_vl.setSpacing(4)
+        ph = QLabel("Click  ↻ Refresh statistics  to generate the charts")
+        ph.setObjectName("emptyState"); ph.setAlignment(Qt.AlignCenter)
+        self._stats_vl.addWidget(ph); self._stats_vl.addStretch()
+        self._stats_scroll.setWidget(self._stats_inner)
+        vl.addWidget(self._stats_scroll, 1)
+        self.tabs.addTab(w, "Statistics")
+
+    def _refresh_stats(self):
+        from qgis.PyQt.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QFrame
+        # Clear
+        while self._stats_vl.count():
+            it = self._stats_vl.takeAt(0)
+            if it.widget(): it.widget().deleteLater()
+
+        _tc = getattr(self, '_current_theme', LIGHT_CLR)
+        palette = ['#5a8abf','#c8a860','#7ab87a','#e07820','#a050a0','#60b0b0',
+                   '#3db5c8','#d4845a','#88b04b','#b07cc6']
+
+        datasets = [
+            ("Context Types",      self._count_by_field(self.ctx_layer_cb, 'type')),
+            ("Pottery Forms",      self._count_by_field(self.pot_layer_cb, 'form')),
+            ("Artifact Types",     self._count_by_field(self.art_layer_cb, 'type')),
+            ("Periods — Contexts", self._count_by_field(self.ctx_layer_cb, 'period')),
+        ]
+
+        has_data = False
+        for ds_idx, (title, counts) in enumerate(datasets):
+            if not counts:
+                continue
+            has_data = True
+
+            # Section header with record count
+            sec_w = QWidget(); sec_w.setStyleSheet("background:transparent;")
+            sec_h = QHBoxLayout(sec_w); sec_h.setContentsMargins(0, 16 if ds_idx else 0, 0, 6)
+            sec_lbl = QLabel(title); sec_lbl.setObjectName("h4")
+            total_lbl = QLabel(f"{sum(counts.values())} records")
+            total_lbl.setObjectName("mutedXs")
+            sec_h.addWidget(sec_lbl); sec_h.addStretch(); sec_h.addWidget(total_lbl)
+            self._stats_vl.addWidget(sec_w)
+
+            mx = max(counts.values())
+            total = sum(counts.values())
+            sorted_items = sorted(counts.items(), key=lambda x: -x[1])[:15]
+
+            for ci, (label, count) in enumerate(sorted_items):
+                color = palette[ci % len(palette)]
+
+                row_w = QWidget(); row_w.setStyleSheet("background:transparent;")
+                row_h = QHBoxLayout(row_w)
+                row_h.setContentsMargins(0, 2, 0, 2); row_h.setSpacing(10)
+
+                # Category label (right-aligned, fixed width)
+                name_lbl = QLabel(str(label)[:26])
+                name_lbl.setFixedWidth(190)
+                name_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                name_lbl.setObjectName("bodyText")
+                row_h.addWidget(name_lbl)
+
+                # Bar — fills proportional width using layout stretch
+                track = QWidget(); track.setStyleSheet("background:transparent;")
+                track_h = QHBoxLayout(track)
+                track_h.setContentsMargins(0, 0, 0, 0); track_h.setSpacing(0)
+                bar = QFrame(); bar.setFixedHeight(22)
+                bar.setStyleSheet(
+                    f"background:{color};border-radius:4px;")
+                pct_int = max(2, int(count * 1000 / mx))
+                rest = max(0, 1000 - pct_int)
+                track_h.addWidget(bar, pct_int)
+                if rest:
+                    sp = QWidget(); sp.setStyleSheet("background:transparent;")
+                    track_h.addWidget(sp, rest)
+                row_h.addWidget(track, 1)
+
+                # Count + percentage
+                cnt_lbl = QLabel(f"{count}  ({100*count//total}%)")
+                cnt_lbl.setObjectName("mutedXs")
+                cnt_lbl.setFixedWidth(80)
+                row_h.addWidget(cnt_lbl)
+
+                self._stats_vl.addWidget(row_w)
+
+            # Thin separator
+            sep = QFrame(); sep.setObjectName("hsep")
+            sep_wrap = QWidget(); sep_wrap.setStyleSheet("background:transparent;")
+            sep_vl = QVBoxLayout(sep_wrap); sep_vl.setContentsMargins(0, 8, 0, 0)
+            sep_vl.addWidget(sep)
+            self._stats_vl.addWidget(sep_wrap)
+
+        if not has_data:
+            empty = QLabel("No data — connect layers and load a project first")
+            empty.setObjectName("emptyState"); empty.setAlignment(Qt.AlignCenter)
+            self._stats_vl.addWidget(empty)
+
+        self._stats_vl.addStretch()
+
+    def _count_by_field(self, layer_cb, field_name):
+        lyr=self._lyr(layer_cb)
+        if not lyr: return {}
+        fnames=[f.name() for f in lyr.fields()]
+        if field_name not in fnames: return {}
+        counts={}
+        for feat in lyr.getFeatures():
+            v=str(feat.attribute(field_name) or 'Unknown').strip()
+            if v.lower() in ('null','none',''): v='Unknown'
+            counts[v]=counts.get(v,0)+1
+        return counts
+
+    # ── Timeline tab ─────────────────────────────────────────────────────────
+    def _build_timeline_tab(self):
+        from qgis.PyQt.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
+                                          QPushButton, QScrollArea, QLabel, QFrame)
+        w = QWidget(); w.setStyleSheet("background:transparent;")
+        vl = QVBoxLayout(w); vl.setContentsMargins(0, 0, 0, 0); vl.setSpacing(0)
+
+        vl.addWidget(ContentTitle("Timeline",
+                                  "Stratigraphic period sequence — contexts, pottery and artifacts by era"))
+
+        ab = QWidget(); ab.setObjectName("actionBar")
+        hdr = QHBoxLayout(ab); hdr.setContentsMargins(24, 6, 24, 6); hdr.setSpacing(8)
+        refresh = QPushButton("↻ Build timeline"); refresh.setObjectName("btn_secondary")
+        refresh.clicked.connect(self._refresh_timeline)
+        hdr.addWidget(refresh); hdr.addStretch()
+        vl.addWidget(ab)
+
+        self._tl_scroll = QScrollArea()
+        self._tl_scroll.setWidgetResizable(True)
+        self._tl_scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        self._tl_inner = QWidget(); self._tl_inner.setStyleSheet("background:transparent;")
+        self._tl_vl = QVBoxLayout(self._tl_inner)
+        self._tl_vl.setContentsMargins(32, 20, 32, 32); self._tl_vl.setSpacing(4)
+        ph = QLabel("Click  ↻ Build timeline  to generate the period chart")
+        ph.setObjectName("emptyState"); ph.setAlignment(Qt.AlignCenter)
+        self._tl_vl.addWidget(ph); self._tl_vl.addStretch()
+        self._tl_scroll.setWidget(self._tl_inner)
+        vl.addWidget(self._tl_scroll, 1)
+        self.tabs.addTab(w, "Timeline")
+
+    PERIOD_ORDER=[
+        'Prehistoric','Early Bronze Age','Middle Bronze Age','Late Bronze Age',
+        'Iron Age','Persian','Hellenistic','Roman','Byzantine','Early Islamic',
+        'Crusader','Medieval','Mamluk','Ottoman','Modern','Unknown'
+    ]
+    PERIOD_COLORS=[
+        '#8B7355','#CD853F','#DAA520','#B8860B','#808000','#6B8E23','#2E8B57',
+        '#20B2AA','#4169E1','#6A5ACD','#9932CC','#C71585','#DC143C','#FF8C00',
+        '#888','#999'
+    ]
+
+    def _refresh_timeline(self):
+        from qgis.PyQt.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QFrame
+        # Clear
+        while self._tl_vl.count():
+            it = self._tl_vl.takeAt(0)
+            if it.widget(): it.widget().deleteLater()
+
+        _tc = getattr(self, '_current_theme', LIGHT_CLR)
+
+        # Collect period counts from all layers
+        period_counts = {}
+        for lcb, nf in [(self.ctx_layer_cb, 'period'),
+                        (self.pot_layer_cb,  'period'),
+                        (self.art_layer_cb,  'period')]:
+            lyr = self._lyr(lcb)
+            if not lyr: continue
+            fnames = [f.name() for f in lyr.fields()]
+            if nf not in fnames:
+                nf = next((f for f in fnames if 'period' in f.lower() or 'date' in f.lower()), None)
+                if not nf: continue
+            for feat in lyr.getFeatures():
+                v = str(feat.attribute(nf) or '').strip()
+                if v.lower() in ('null', 'none', ''): continue
+                period_counts[v] = period_counts.get(v, 0) + 1
+
+        if not period_counts:
+            empty = QLabel("No period data found — map the period fields in Layer Configuration")
+            empty.setObjectName("emptyState"); empty.setAlignment(Qt.AlignCenter)
+            self._tl_vl.addWidget(empty); self._tl_vl.addStretch()
+            return
+
+        def sort_key(p):
+            try: return PERIOD_ORDER.index(p)
+            except: return len(PERIOD_ORDER) + (ord(p[0]) if p else 999)
+
+        sorted_periods = sorted(period_counts.keys(), key=sort_key)
+        total = sum(period_counts.values())
+        mx = max(period_counts.values())
+
+        # Summary row
+        summ_w = QWidget(); summ_w.setStyleSheet("background:transparent;")
+        summ_h = QHBoxLayout(summ_w); summ_h.setContentsMargins(0, 0, 0, 12)
+        summ_lbl = QLabel(f"  {total} total records  ·  {len(sorted_periods)} periods")
+        summ_lbl.setObjectName("muted")
+        summ_h.addWidget(summ_lbl); summ_h.addStretch()
+        self._tl_vl.addWidget(summ_w)
+
+        for pi, period in enumerate(sorted_periods):
+            count = period_counts[period]
+            color = PERIOD_COLORS[pi % len(PERIOD_COLORS)]
+
+            row_w = QWidget(); row_w.setStyleSheet("background:transparent;")
+            row_h = QHBoxLayout(row_w)
+            row_h.setContentsMargins(0, 2, 0, 2); row_h.setSpacing(0)
+
+            # Left colour strip (period identity)
+            strip = QFrame(); strip.setFixedWidth(5); strip.setFixedHeight(30)
+            strip.setStyleSheet(f"background:{color};border-radius:2px;")
+            row_h.addWidget(strip)
+            row_h.addSpacing(10)
+
+            # Period label
+            per_lbl = QLabel(period)
+            per_lbl.setFixedWidth(210)
+            per_lbl.setObjectName("bodyText")
+            per_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            row_h.addWidget(per_lbl)
+
+            # Proportional bar track
+            track = QWidget(); track.setStyleSheet("background:transparent;")
+            track_h = QHBoxLayout(track)
+            track_h.setContentsMargins(0, 4, 0, 4); track_h.setSpacing(0)
+            bar = QFrame()
+            bar.setStyleSheet(
+                f"background:{color};border-radius:4px;opacity:0.85;")
+            pct_int = max(2, int(count * 1000 / mx))
+            rest = max(0, 1000 - pct_int)
+            track_h.addWidget(bar, pct_int)
+            if rest:
+                sp = QWidget(); sp.setStyleSheet("background:transparent;")
+                track_h.addWidget(sp, rest)
+            row_h.addWidget(track, 1)
+            row_h.addSpacing(10)
+
+            # Count + %
+            cnt_lbl = QLabel(f"{count}  ({100*count//total}%)")
+            cnt_lbl.setObjectName("mutedXs")
+            cnt_lbl.setFixedWidth(90)
+            cnt_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            row_h.addWidget(cnt_lbl)
+
+            self._tl_vl.addWidget(row_w)
+
+        self._tl_vl.addStretch()
+
+    # ── History tab ───────────────────────────────────────────────────────────
+    def _build_history_tab(self):
+        from qgis.PyQt.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QPushButton,QLineEdit,QLabel
+        w = QWidget(); w.setStyleSheet("background:transparent;")
+        vl = QVBoxLayout(w); vl.setContentsMargins(0, 0, 0, 0); vl.setSpacing(0)
+
+        vl.addWidget(ContentTitle("Edit History",
+                                  "Audit trail of all data changes in this project"))
+
+        # Action bar
+        ab = QWidget(); ab.setObjectName("actionBar")
+        hdr = QHBoxLayout(ab); hdr.setContentsMargins(24, 6, 24, 6); hdr.setSpacing(8)
+
+        # User pill
+        user_lbl = QLabel("User:"); user_lbl.setObjectName("mutedXs")
+        self._hist_dot = QLabel("●"); self._hist_dot.setObjectName("accentLabel")
+        self.user_input = QLineEdit(self._current_user)
+        self.user_input.setMaximumWidth(160); self.user_input.setObjectName("histUserInput")
+        self.user_input.textChanged.connect(lambda t: setattr(self, '_current_user', t))
+
+        refresh = QPushButton("↻ Refresh"); refresh.setObjectName("btn_secondary")
+        refresh.clicked.connect(self._load_history)
+        clear = QPushButton("🗑 Clear history"); clear.setObjectName("btn_danger")
+        clear.clicked.connect(self._clear_history)
+
+        hdr.addWidget(self._hist_dot); hdr.addWidget(user_lbl)
+        hdr.addWidget(self.user_input); hdr.addWidget(refresh)
+        hdr.addWidget(clear); hdr.addStretch()
+        vl.addWidget(ab)
+
+        tbl_w = QWidget(); tbl_w.setStyleSheet("background:transparent;")
+        tbl_vl = QVBoxLayout(tbl_w); tbl_vl.setContentsMargins(16, 8, 16, 16)
+        self.hist_tbl = self._mktbl()
+        tbl_vl.addWidget(self.hist_tbl)
+        vl.addWidget(tbl_w, 1)
+        self.tabs.addTab(w, "History")
+
+    def _load_history(self):
+        lyr=self._lyr(self.hist_layer_cb)
+        if not lyr:
+            # Show in-memory log if no layer connected
+            mem=getattr(self,'_mem_history',[])
+            self.hist_tbl.setColumnCount(4)
+            self.hist_tbl.setHorizontalHeaderLabels(["Timestamp","User","Action","Details"])
+            self.hist_tbl.setRowCount(max(1,len(mem)))
+            if not mem:
+                self.hist_tbl.setItem(0,0,QTableWidgetItem("No edit_history layer connected"))
+                self.hist_tbl.setItem(0,1,QTableWidgetItem("Create a project or connect the edit_history layer"))
+                self.hist_tbl.setSpan(0,0,1,1)
+                for c in range(1,4): self.hist_tbl.setItem(0,c,QTableWidgetItem(""))
+            else:
+                for ri,row in enumerate(reversed(mem)):
+                    for ci,v in enumerate(row): self.hist_tbl.setItem(ri,ci,QTableWidgetItem(str(v)))
+            return
+        fnames=[f.name() for f in lyr.fields()]
+        feats=list(lyr.getFeatures())
+        feats.sort(key=lambda f: str(f.attribute('timestamp') or ''),reverse=True)
+        self.hist_tbl.setColumnCount(len(fnames)); self.hist_tbl.setHorizontalHeaderLabels(fnames)
+        if not feats:
+            self.hist_tbl.setRowCount(1)
+            self.hist_tbl.setItem(0,0,QTableWidgetItem("No history recorded yet — actions will appear here as you add/edit data"))
+            for c in range(1,len(fnames)): self.hist_tbl.setItem(0,c,QTableWidgetItem(""))
+            return
+        self.hist_tbl.setRowCount(len(feats)); self.hist_tbl.setProperty("_fids",[f.id() for f in feats])
+        for ri,feat in enumerate(feats):
+            for ci,fn in enumerate(fnames):
+                v=feat.attribute(fn)
+                self.hist_tbl.setItem(ri,ci,QTableWidgetItem(str(v) if v is not None else ''))
+
+    def _clear_history(self):
+        lyr=self._lyr(self.hist_layer_cb)
+        if not lyr: return
+        reply=QMessageBox.question(self,"Clear history","Delete all history records?",
+            QMessageBox.Yes|QMessageBox.No)
+        if reply!=QMessageBox.Yes: return
+        lyr.startEditing()
+        lyr.deleteFeatures([f.id() for f in lyr.getFeatures()])
+        lyr.commitChanges(); self._load_history()
+
+    # ── Backup ───────────────────────────────────────────────────────────────
+    def _backup_project(self):
+        gpkg=None
+        lyr=self._lyr(self.ctx_layer_cb)
+        if lyr:
+            uri=lyr.dataProvider().dataSourceUri()
+            if '|' in uri: gpkg=uri.split('|')[0]
+        if not gpkg or not os.path.exists(gpkg):
+            gpkg,_=QFileDialog.getOpenFileName(self,"Select GeoPackage to back up","","GeoPackage (*.gpkg)")
+            if not gpkg: return
+        ts=datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup=gpkg.replace('.gpkg',f'_backup_{ts}.gpkg')
+        shutil.copy2(gpkg,backup)
+        # Also back up the media sidecar if it exists
+        media_src = gpkg + '.media.json'
+        if os.path.exists(media_src):
+            shutil.copy2(media_src, backup + '.media.json')
+        self._msg(f"Backup saved: {os.path.basename(backup)}")
+        QMessageBox.information(self,"Backup complete",f"Saved to:\n{backup}")
+
+    # ── Per-context PDF ────────────────────────────────────────────────────────
+    def _export_context_pdf(self):
+        num_str=self.ctxdet_cb.currentText().strip() if hasattr(self,'ctxdet_cb') else ''
+        if not num_str: QMessageBox.warning(self,"","Open Context View tab and select a context first."); return
+        try: num=int(num_str)
+        except: QMessageBox.warning(self,"","Context number must be integer."); return
+        path,_=QFileDialog.getSaveFileName(self,f"Export Context {num} PDF",
+            f"context_{num}.pdf","PDF (*.pdf)")
+        if not path: return
+        from .pdf_export import _export_context_page
+        ok=_export_context_page(path,num,self)
+        if ok: self._msg(f"Context {num} exported to PDF")
+        else: QMessageBox.warning(self,"","Export failed")
+
+    # ── Load all extension ─────────────────────────────────────────────────────
+    def _load_all(self):
+        self._load_all_base()
+        if hasattr(self,'draw_filter'):
+            self.draw_filter.clear(); self.draw_filter.addItem("All")
+            for n in sorted(self.ctx_data.keys()): self.draw_filter.addItem(str(n))
+        if hasattr(self,'hist_tbl'): self._load_history()
+
+
+
+# ── Archaeologist Filter tab (appended) ──────────────────────────────────────
+class _ArchaeologistMixin:
+    """Archaeologist filter tab."""
+
+    def _build_archaeologist_tab(self):
+        from qgis.PyQt.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox
+        w = QWidget(); w.setStyleSheet("background:transparent;")
+        vl = QVBoxLayout(w); vl.setContentsMargins(0, 0, 0, 0); vl.setSpacing(0)
+
+        vl.addWidget(ContentTitle("By Archaeologist",
+                                  "Filter all data by recorder — see every record made by one person"))
+
+        body = QWidget(); body.setStyleSheet("background:transparent;")
+        bv = QVBoxLayout(body); bv.setContentsMargins(32, 12, 32, 16); bv.setSpacing(12)
+
+        # Info
+        info_frame = QFrame(); info_frame.setObjectName("infoCard")
+        il = QHBoxLayout(info_frame); il.setContentsMargins(14, 10, 14, 10)
+        info = QLabel("Select which field holds the archaeologist's initials, then pick a name. "
+                      "All tables below update to show only their records.")
+        info.setWordWrap(True)
+        il.addWidget(info)
+        bv.addWidget(info_frame)
+
+        # Field pickers per layer
+        cfg_grp = QGroupBox("Which field identifies the recorder?")
+        cf = QFormLayout(cfg_grp); cf.setSpacing(6); cf.setContentsMargins(16, 10, 16, 10)
+        self.arch_ctx_field   = QComboBox(); self.arch_ctx_field.setEditable(True)
+        self.arch_pot_field   = QComboBox(); self.arch_pot_field.setEditable(True)
+        self.arch_art_field   = QComboBox(); self.arch_art_field.setEditable(True)
+        self.arch_ske_field   = QComboBox(); self.arch_ske_field.setEditable(True)
+        for cb in [self.arch_ctx_field, self.arch_pot_field, self.arch_art_field, self.arch_ske_field]:
+            cb.addItem("— none —")
+        cf.addRow(QLabel("Context field:"),  self.arch_ctx_field)
+        cf.addRow(QLabel("Pottery field:"),  self.arch_pot_field)
+        cf.addRow(QLabel("Artifact field:"), self.arch_art_field)
+        cf.addRow(QLabel("Skeleton field:"), self.arch_ske_field)
+        bv.addWidget(cfg_grp)
+
+        # Person selector + action buttons
+        sel_row = QHBoxLayout(); sel_row.setSpacing(8)
+        sel_lbl = QLabel("Archaeologist:"); sel_lbl.setObjectName("mutedXs")
+        self.arch_person_cb = QComboBox(); self.arch_person_cb.setEditable(True)
+        self.arch_person_cb.setMinimumWidth(180)
+        scan_btn = QPushButton("↻ Scan names"); scan_btn.setObjectName("btn_ghost")
+        scan_btn.clicked.connect(self._scan_archaeologists)
+        filter_btn = QPushButton("🔍 Filter tables"); filter_btn.setObjectName("btn_primary")
+        filter_btn.clicked.connect(self._apply_archaeologist_filter)
+        clear_btn = QPushButton("✕ Clear"); clear_btn.setObjectName("btn_danger")
+        clear_btn.clicked.connect(self._clear_archaeologist_filter)
+        for w_ in (sel_lbl, self.arch_person_cb, scan_btn, filter_btn, clear_btn):
+            sel_row.addWidget(w_)
+        sel_row.addStretch()
+        bv.addLayout(sel_row)
+
+        self.arch_status = QLabel(""); self.arch_status.setObjectName("statusMsg")
+        bv.addWidget(self.arch_status)
+        vl.addWidget(body)
+
+        # Results sub-tabs
+        self.arch_tabs = QTabWidget(); self.arch_tabs.setObjectName("subTabs")
+        self.arch_ctx_tbl = self._mktbl(); self.arch_tabs.addTab(self.arch_ctx_tbl,  "📋 Contexts")
+        self.arch_pot_tbl = self._mktbl(); self.arch_tabs.addTab(self.arch_pot_tbl,  "🏺 Pottery")
+        self.arch_art_tbl = self._mktbl(); self.arch_tabs.addTab(self.arch_art_tbl,  "⚱ Artifacts")
+        self.arch_ske_tbl = self._mktbl(); self.arch_tabs.addTab(self.arch_ske_tbl,  "💀 Skeletons")
+        vl.addWidget(self.arch_tabs, 1)
+        self.tabs.addTab(w, "By Archaeologist")
+
+
+    def _populate_arch_fields(self):
+        """Fill the field combos with fields from each layer."""
+        for lyr_cb, field_cb, candidates in [
+            (self.ctx_layer_cb, self.arch_ctx_field,
+             ['initials','recorded_by','user','archaeologist','fieldworker','recorder','by','user_name']),
+            (self.pot_layer_cb, self.arch_pot_field,
+             ['initials','recorded_by','user','archaeologist','fieldworker','recorder','by','user_name']),
+            (self.art_layer_cb, self.arch_art_field,
+             ['initials','recorded_by','user','archaeologist','fieldworker','recorder','by','user_name']),
+            (self.ske_layer_cb, self.arch_ske_field,
+             ['initials','recorded_by','user','archaeologist','fieldworker','recorder','by','user_name']),
+        ]:
+            lyr = self._lyr(lyr_cb)
+            if not lyr: continue
+            fnames = [f.name() for f in lyr.fields()]
+            field_cb.clear(); field_cb.addItem("— none —"); field_cb.addItems(fnames)
+            for c in candidates:
+                for fn in fnames:
+                    if c.lower() in fn.lower():
+                        idx = field_cb.findText(fn)
+                        if idx >= 0: field_cb.setCurrentIndex(idx); break
+
+    def _scan_archaeologists(self):
+        """Collect all unique values from the recorder fields."""
+        self._populate_arch_fields()
+        people = set()
+        for lyr_cb, field_cb in [
+            (self.ctx_layer_cb, self.arch_ctx_field),
+            (self.pot_layer_cb, self.arch_pot_field),
+            (self.art_layer_cb, self.arch_art_field),
+            (self.ske_layer_cb, self.arch_ske_field),
+        ]:
+            lyr = self._lyr(lyr_cb)
+            fn  = field_cb.currentText()
+            if not lyr or fn == "— none —": continue
+            for feat in lyr.getFeatures():
+                v = str(feat.attribute(fn) or "").strip()
+                if v and v.lower() not in ("null","none",""): people.add(v)
+        self.arch_person_cb.clear()
+        for p in sorted(people): self.arch_person_cb.addItem(p)
+        self.arch_status.setText(f"Found {len(people)} archaeologist(s): {', '.join(sorted(people))}")
+
+    def _apply_archaeologist_filter(self):
+        person = self.arch_person_cb.currentText().strip()
+        if not person: QMessageBox.warning(self,"","Select or type an archaeologist name/initials."); return
+
+        total = 0
+        for lyr_cb, field_cb, tbl, tbl_name in [
+            (self.ctx_layer_cb, self.arch_ctx_field, self.arch_ctx_tbl,  "contexts"),
+            (self.pot_layer_cb, self.arch_pot_field, self.arch_pot_tbl,  "pottery"),
+            (self.art_layer_cb, self.arch_art_field, self.arch_art_tbl,  "artifacts"),
+            (self.ske_layer_cb, self.arch_ske_field, self.arch_ske_tbl,  "skeletons"),
+        ]:
+            tbl.clearContents(); tbl.setRowCount(0)
+            lyr = self._lyr(lyr_cb); fn = field_cb.currentText()
+            if not lyr or fn == "— none —":
+                tbl.setColumnCount(1)
+                tbl.setHorizontalHeaderLabels([f"No layer/field set for {tbl_name}"])
+                continue
+            fnames = [f.name() for f in lyr.fields()]
+            tbl.setColumnCount(len(fnames)); tbl.setHorizontalHeaderLabels(fnames)
+            feats = [f for f in lyr.getFeatures()
+                     if str(f.attribute(fn) or "").strip().lower() == person.lower()]
+            tbl.setRowCount(len(feats)); tbl.setProperty("_fids",[f.id() for f in feats])
+            for ri, feat in enumerate(feats):
+                for ci, fname in enumerate(fnames):
+                    v = feat.attribute(fname)
+                    tbl.setItem(ri, ci, QTableWidgetItem(str(v) if v is not None else ""))
+            total += len(feats)
+
+        self.arch_status.setText(f"Showing {total} records for '{person}'")
+        self._msg(f"Filter: {total} records for {person}")
+
+    def _clear_archaeologist_filter(self):
+        for tbl in [self.arch_ctx_tbl, self.arch_pot_tbl,
+                    self.arch_art_tbl, self.arch_ske_tbl]:
+            tbl.clearContents(); tbl.setRowCount(0)
+        self.arch_status.setText("Filter cleared")
+
+
+
+# ── Grid Map Tab ──────────────────────────────────────────────────────────────
+class _GridMapMixin:
+    """Excavation grid layer + grid map tab."""
+
+    def _create_grid_layer(self):
+        """Create excavation_grids polygon layer in existing GeoPackage."""
+        path,_=QFileDialog.getOpenFileName(self,"Select GeoPackage","","GeoPackage (*.gpkg)")
+        if not path: return
+        schema=SCHEMAS.get('excavation_grids',[])
+        fields=QgsFields()
+        for fname,ftype in schema: fields.append(QgsField(fname,ftype))
+        opts=QgsVectorFileWriter.SaveVectorOptions()
+        opts.driverName='GPKG'; opts.fileEncoding='UTF-8'
+        opts.layerName='excavation_grids'
+        opts.actionOnExistingFile=QgsVectorFileWriter.CreateOrOverwriteLayer
+        QgsVectorFileWriter.create(path,fields,QgsWkbTypes.Polygon,
+            QgsCoordinateReferenceSystem('EPSG:4326'),
+            QgsCoordinateTransformContext(),opts)
+        uri=f"{path}|layername=excavation_grids"
+        site=getattr(self,'_current_site','SITE')
+        lyr=QgsVectorLayer(uri,f"{site}_excavation_grids",'ogr')
+        if lyr.isValid():
+            # Apply a nice default style
+            from qgis.core import QgsSimpleFillSymbolLayer, QgsSingleSymbolRenderer, QgsSymbol
+            sym=QgsSymbol.defaultSymbol(QgsWkbTypes.PolygonGeometry)
+            sym.setOpacity(0.6)
+            fl=sym.symbolLayer(0)
+            fl.setColor(QColor(180,210,240,140))
+            fl.setStrokeColor(QColor(30,80,160))
+            fl.setStrokeWidth(0.8)
+            lyr.setRenderer(QgsSingleSymbolRenderer(sym))
+            # Label by grid_name
+            from qgis.core import QgsPalLayerSettings, QgsVectorLayerSimpleLabeling, QgsTextFormat
+            lbl=QgsPalLayerSettings()
+            lbl.fieldName='grid_name'; lbl.enabled=True
+            fmt=QgsTextFormat(); fmt.setSize(9)
+            lbl.setFormat(fmt)
+            lyr.setLabeling(QgsVectorLayerSimpleLabeling(lbl))
+            lyr.setLabelsEnabled(True)
+            QgsProject.instance().addMapLayer(lyr)
+            self._refresh_combos()
+            for i in range(self.grid_layer_cb.count()):
+                if 'excavation_grids' in self.grid_layer_cb.itemText(i).lower():
+                    self.grid_layer_cb.setCurrentIndex(i); break
+            self._msg("excavation_grids layer created and styled")
+            QMessageBox.information(self,"Done",
+                "Excavation grids layer created.\n\n"
+                "Use 'Start drawing' to digitize grids on the map,\n"
+                "or toggle layer editing in QGIS and use the polygon digitizing tool.")
+        else:
+            QMessageBox.warning(self,"","Failed to create layer.")
+
+    def _build_grid_map_tab(self):
+        from qgis.PyQt.QtWidgets import (
+            QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+            QGroupBox, QFormLayout, QLineEdit, QDoubleSpinBox, QSplitter
+        )
+        w=QWidget(); vl=QVBoxLayout(w); vl.setContentsMargins(6,6,6,6); vl.setSpacing(6)
+
+        # Header
+        hdr=QLabel("⬡  Excavation Grid Map")
+        hdr.setObjectName("h3")
+        vl.addWidget(hdr)
+
+        # Top controls
+        top=QHBoxLayout()
+        draw_btn=QPushButton("✏  Start drawing grid on map")
+        draw_btn.setObjectName("btn_primary")
+        draw_btn.clicked.connect(self._start_grid_drawing)
+        stop_btn=QPushButton("⏹ Stop drawing")
+        stop_btn.setObjectName("btn_danger")
+        stop_btn.clicked.connect(self._stop_grid_drawing)
+        zoom_btn=QPushButton("🔍 Zoom to grids")
+        zoom_btn.setObjectName("btn_ghost")
+        zoom_btn.clicked.connect(self._zoom_to_grids)
+        export_btn=QPushButton("📄 Export grid map")
+        export_btn.setObjectName("btn_purple")
+        export_btn.clicked.connect(self._export_grid_map)
+        for b in [draw_btn,stop_btn,zoom_btn,export_btn]: top.addWidget(b)
+        vl.addLayout(top)
+
+        # Split: form left, grid table right
+        split=QSplitter(Qt.Horizontal)
+
+        # Left: metadata form for new/selected grid
+        form_w=QWidget(); form_v=QVBoxLayout(form_w)
+        form_v.addWidget(QLabel("<b>Grid metadata</b><br><small>Fill in then click Add Grid</small>"))
+        ff=QFormLayout(); ff.setSpacing(4)
+        self.grid_name_input  =QLineEdit(); self.grid_name_input.setPlaceholderText("e.g. Square A1")
+        self.grid_site_input  =QLineEdit(); self.grid_site_input.setText(getattr(self,'_current_site',''))
+        self.grid_season_input=QLineEdit(); self.grid_season_input.setPlaceholderText("e.g. 2025")
+        self.grid_elev_input  =QDoubleSpinBox(); self.grid_elev_input.setRange(-200,4000); self.grid_elev_input.setDecimals(1)
+        self.grid_notes_input =QLineEdit()
+        ff.addRow("Grid name:", self.grid_name_input)
+        ff.addRow("Site:",      self.grid_site_input)
+        ff.addRow("Season:",    self.grid_season_input)
+        ff.addRow("Elevation:", self.grid_elev_input)
+        ff.addRow("Notes:",     self.grid_notes_input)
+        form_v.addLayout(ff)
+        add_btn=QPushButton("＋ Add grid (draws next polygon)")
+        add_btn.setObjectName("btn_primary")
+        add_btn.clicked.connect(self._add_grid_record)
+        form_v.addWidget(add_btn)
+        edit_sel=QPushButton("✏ Edit selected grid")
+        edit_sel.setObjectName("btn_secondary")
+        edit_sel.clicked.connect(lambda:self._edit_row('grid'))
+        del_sel=QPushButton("🗑 Delete selected"); del_sel.setObjectName("btn_danger")
+        del_sel.clicked.connect(lambda:self._delete_rows(self.grid_tbl,self._lyr(self.grid_layer_cb),'grid'))
+        row2=QHBoxLayout(); row2.addWidget(edit_sel); row2.addWidget(del_sel)
+        form_v.addLayout(row2); form_v.addStretch()
+        split.addWidget(form_w)
+
+        # Right: grid table
+        tbl_w=QWidget(); tbl_v=QVBoxLayout(tbl_w)
+        tbl_v.addWidget(QLabel("<b>Recorded grids</b>"))
+        self.grid_tbl=self._mktbl()
+        self.grid_tbl.itemSelectionChanged.connect(self._on_grid_select)
+        tbl_v.addWidget(self.grid_tbl,1)
+        reload_btn=QPushButton("↻ Reload"); reload_btn.clicked.connect(self._reload_grids)
+        tbl_v.addWidget(reload_btn)
+        split.addWidget(tbl_w)
+        split.setSizes([260,600])
+        vl.addWidget(split,1)
+
+        # Status label
+        self.grid_status=QLabel("")
+        self.grid_status.setObjectName("statusMsg")
+        vl.addWidget(self.grid_status)
+        self._grid_draw_tool=None
+        return w
+
+    def _start_grid_drawing(self):
+        """Activate polygon drawing tool on the grid layer."""
+        lyr=self._lyr(self.grid_layer_cb)
+        if not lyr: QMessageBox.warning(self,"","Create or connect the excavation_grids layer first."); return
+        # Set as active layer and start editing
+        self.iface.setActiveLayer(lyr)
+        if not lyr.isEditable(): lyr.startEditing()
+        # Activate add feature tool
+        self.iface.actionAddFeature().trigger()
+        self.grid_status.setText("Drawing mode active — click on the map to draw polygon vertices. Right-click to finish.")
+        self._msg("Grid drawing active — draw on the QGIS map canvas")
+
+    def _stop_grid_drawing(self):
+        """Stop drawing and commit."""
+        lyr=self._lyr(self.grid_layer_cb)
+        if lyr and lyr.isEditable():
+            lyr.commitChanges()
+            self.iface.actionPan().trigger()
+            self._reload_grids()
+            self.grid_status.setText("Drawing stopped. Grids saved.")
+
+    def _add_grid_record(self):
+        """Add metadata record — call before or after drawing the polygon."""
+        lyr=self._lyr(self.grid_layer_cb)
+        if not lyr: QMessageBox.warning(self,"","Set grid layer first."); return
+        from qgis.core import QgsFeature
+        vals={
+            'grid_name':  self.grid_name_input.text().strip(),
+            'site':       self.grid_site_input.text().strip() or getattr(self,'_current_site',''),
+            'season':     self.grid_season_input.text().strip(),
+            'elevation_m':self.grid_elev_input.value(),
+            'notes':      self.grid_notes_input.text().strip(),
+        }
+        if not vals['grid_name']: QMessageBox.warning(self,"","Enter a grid name."); return
+        self._write_feat(lyr,vals)
+        self.grid_status.setText(f"Grid '{vals['grid_name']}' recorded. Draw its polygon on the map.")
+        self._reload_grids()
+        # Clear form
+        self.grid_name_input.clear(); self.grid_notes_input.clear()
+
+    def _reload_grids(self):
+        lyr=self._lyr(self.grid_layer_cb)
+        if not lyr: self.grid_tbl.setRowCount(0); return
+        fnames=[f.name() for f in lyr.fields()]
+        feats=list(lyr.getFeatures())
+        self.grid_tbl.setColumnCount(len(fnames)); self.grid_tbl.setHorizontalHeaderLabels(fnames)
+        self.grid_tbl.setRowCount(len(feats)); self.grid_tbl.setProperty("_fids",[f.id() for f in feats])
+        for ri,feat in enumerate(feats):
+            for ci,fn in enumerate(fnames):
+                v=feat.attribute(fn)
+                self.grid_tbl.setItem(ri,ci,QTableWidgetItem(str(v) if v is not None else ''))
+
+    def _on_grid_select(self):
+        """Select grid on map when clicked in table."""
+        rows=self.grid_tbl.selectionModel().selectedRows()
+        if not rows: return
+        ri=rows[0].row(); fids=self.grid_tbl.property("_fids") or []
+        if ri>=len(fids): return
+        lyr=self._lyr(self.grid_layer_cb)
+        if not lyr: return
+        lyr.removeSelection(); lyr.select(fids[ri])
+        self.iface.mapCanvas().panToSelected(lyr)
+        # Fill form with selected grid's data
+        feat=lyr.getFeature(fids[ri])
+        try:
+            self.grid_name_input.setText(str(feat.attribute('grid_name') or ''))
+            self.grid_site_input.setText(str(feat.attribute('site') or ''))
+            self.grid_season_input.setText(str(feat.attribute('season') or ''))
+            try: self.grid_elev_input.setValue(float(feat.attribute('elevation_m') or 0))
+            except: pass
+            self.grid_notes_input.setText(str(feat.attribute('notes') or ''))
+        except: pass
+
+    def _zoom_to_grids(self):
+        lyr=self._lyr(self.grid_layer_cb)
+        if lyr:
+            self.iface.mapCanvas().setExtent(lyr.extent().buffered(lyr.extent().width()*0.1))
+            self.iface.mapCanvas().refresh()
+
+    # Patch _edit_row to handle 'grid'
+    def _edit_row(self, pfx):
+        if pfx=='grid':
+            lyr=self._lyr(self.grid_layer_cb)
+            tbl=self.grid_tbl
+            if not lyr: return
+            rows=tbl.selectionModel().selectedRows()
+            if not rows: QMessageBox.information(self,"","Select a grid row first."); return
+            ri=rows[0].row(); fids=tbl.property("_fids") or []
+            if ri>=len(fids): return
+            fid=fids[ri]; feat=lyr.getFeature(fid)
+            defs={f.name():feat.attribute(f.name()) for f in lyr.fields()}
+            dlg=RecordDialog(self._schema_for(lyr),defaults=defs,title="Edit Grid",parent=self)
+            if dlg.exec_()!=QDialog.Accepted: return
+            self._write_feat(lyr,dlg.values(),fid=fid); self._reload_grids()
+        else: self._edit_row_ext_impl(pfx)
+
+    def _export_grid_map(self):
+        """Export the grid map as a professional PNG with site info overlay."""
+        lyr=self._lyr(self.grid_layer_cb)
+        if not lyr: QMessageBox.warning(self,"","Set grid layer first."); return
+        path,_=QFileDialog.getSaveFileName(self,"Export Grid Map","grid_map.png","PNG (*.png);;PDF (*.pdf)")
+        if not path: return
+
+        # Zoom to grid extent first
+        self._zoom_to_grids()
+        self.iface.mapCanvas().refresh()
+
+        # Capture map canvas
+        from qgis.PyQt.QtCore import QSize
+        canvas=self.iface.mapCanvas()
+        canvas_px=QPixmap(canvas.size())
+        canvas.render(canvas_px)
+
+        # Compose final image with overlay
+        margin=40; W=canvas_px.width()+2*margin; H=canvas_px.height()+2*margin+80
+        final=QPixmap(W,H); final.fill(QColor('#f8f5ee'))
+        p=QPainter(final); p.setRenderHint(QPainter.Antialiasing)
+
+        # White map area
+        p.drawPixmap(margin,margin+80,canvas_px)
+        p.setPen(QPen(QColor('#2a2a2a'),1.2))
+        p.drawRect(margin-1,margin+79,canvas_px.width()+2,canvas_px.height()+2)
+
+        # Header band
+        p.setBrush(QBrush(QColor('#1a1a1a'))); p.setPen(QPen(Qt.NoPen))
+        p.drawRect(0,0,W,76)
+
+        # Title
+        site=getattr(self,'_current_site','')
+        grid_count=lyr.featureCount()
+        p.setPen(QColor('#c8a860'))
+        p.setFont(QFont('Arial',18,QFont.Bold))
+        p.drawText(margin,48,f"Excavation Grid Map  —  {site}")
+        p.setFont(QFont('Arial',10)); p.setPen(QColor('#aaa'))
+        from qgis.PyQt.QtCore import QDate
+        p.drawText(margin,68,f"{grid_count} grids  |  Generated: {QDate.currentDate().toString('d MMMM yyyy')}")
+
+        # North arrow (simple)
+        na_x=W-margin-36; na_y=margin+90
+        p.setBrush(QBrush(QColor('#333'))); p.setPen(QPen(Qt.NoPen))
+        from qgis.PyQt.QtGui import QPolygon
+        from qgis.PyQt.QtCore import QPoint
+        p.drawPolygon(QPolygon([QPoint(na_x,na_y),QPoint(na_x-8,na_y+20),QPoint(na_x,na_y+14),QPoint(na_x+8,na_y+20)]))
+        p.setFont(QFont('Arial',8,QFont.Bold)); p.setPen(QColor('#333'))
+        p.drawText(na_x-4,na_y-4,'N')
+
+        # Grid legend (grid names list)
+        leg_y=margin+canvas_px.height()+90
+        if leg_y+40 < H:
+            p.setFont(QFont('Arial',8,QFont.Bold)); p.setPen(QColor('#333'))
+            p.drawText(margin,leg_y,"Grids recorded:")
+            p.setFont(QFont('Arial',8)); lx=margin+110
+            for feat in lyr.getFeatures():
+                try:
+                    nm=str(feat.attribute('grid_name') or '')
+                    if nm:
+                        p.drawText(lx,leg_y,nm+' |'); lx+=p.fontMetrics().horizontalAdvance(nm+' | ')+2
+                        if lx>W-margin: break
+                except: pass
+
+        # Scale bar (approximate)
+        p.setPen(QPen(QColor('#333'),2))
+        p.drawLine(margin,H-16,margin+80,H-16)
+        p.setFont(QFont('Arial',7)); p.drawText(margin,H-6,"approx. scale")
+
+        p.end()
+
+        if path.endswith('.pdf'):
+            # Save as PDF via QPdfWriter
+            try:
+                from qgis.PyQt.QtGui import QPdfWriter, QPagedPaintDevice
+                from qgis.PyQt.QtCore import QMarginsF
+                dev=QPdfWriter(path); dev.setResolution(150)
+                dev.setPageSize(QPagedPaintDevice.A3)
+                pp=QPainter(dev); dev.setPageMargins(QMarginsF(0,0,0,0))
+                dev.setPageSize(QPagedPaintDevice.A3)
+                pp.drawPixmap(0,0,final.scaled(dev.width(),dev.height(),Qt.KeepAspectRatio,Qt.SmoothTransformation))
+                pp.end()
+            except Exception as e:
+                QMessageBox.warning(self,"PDF error",str(e)); return
+        else:
+            final.save(path,'PNG')
+        self._msg(f"Grid map exported: {os.path.basename(path)}")
+        QMessageBox.information(self,"Done",f"Grid map saved to:\n{path}")
+
+
+class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMainWindow):
     def __init__(self,iface):
         super().__init__(); self.iface=iface
         self.setWindowTitle("Archaeological Manager — Anfeh Project")
@@ -2851,7 +3954,7 @@ class ArchWindow(QMainWindow):
             if c.lower() in items: cb.setCurrentIndex(items.index(c.lower())); return
 
     # ── Load data ─────────────────────────────────────────────────────────────
-    def _load_all(self):
+    def _load_all_base(self):
         self._load_ctx(); self._read_layer_rels(); self._load_rels_from_gpkg(); self._fill_ctx_tbl()
         for p in ['pot','art']: self._reload_linked(p)
         self._fill_ske_tbl(); self._refresh_ske_cb()
@@ -2991,7 +4094,7 @@ class ArchWindow(QMainWindow):
     # ── Add/Edit records ──────────────────────────────────────────────────────
     def _schema_for(self, lyr): return schema_for(lyr)
 
-    def _write_feat(self,lyr,vals,fid=None):
+    def _write_feat_base(self,lyr,vals,fid=None):
         lyr.startEditing(); fields=lyr.fields()
         if fid is None:
             feat=QgsFeature(fields)
@@ -3015,7 +4118,7 @@ class ArchWindow(QMainWindow):
         if dlg.exec_()!=QDialog.Accepted: return
         self._write_feat(lyr,dlg.values()); self._load_all()
 
-    def _edit_row(self,pfx):
+    def _edit_row_base(self,pfx):
         if pfx=='ctx': tbl=self.ctx_tbl; lyr=self._lyr(self.ctx_layer_cb)
         elif pfx=='ske': tbl=self.ske_tbl; lyr=self._lyr(self.ske_layer_cb)
         else: tbl=getattr(self,f"{pfx}_tbl"); lyr=self._lyr(getattr(self,f"{pfx}_layer_cb"))
@@ -3275,7 +4378,7 @@ class ArchWindow(QMainWindow):
         self.bone_form_grave.clear(); self.bone_form_site.clear(); self.bone_form_notes.clear()
 
     # ── Relationships ─────────────────────────────────────────────────────────
-    def _delete_rows(self, tbl, lyr, pfx):
+    def _delete_rows_base(self, tbl, lyr, pfx):
         if not lyr: return
         rows=tbl.selectionModel().selectedRows()
         if not rows: QMessageBox.information(self,"","Select row(s) to delete."); return
@@ -3483,1162 +4586,3 @@ class ArchWindow(QMainWindow):
 
 PERIOD_ORDER=['Prehistoric','Early Bronze Age','Middle Bronze Age','Late Bronze Age','Iron Age','Persian','Hellenistic','Roman','Byzantine','Early Islamic','Crusader','Medieval','Mamluk','Ottoman','Modern','Unknown']
 PERIOD_COLORS=['#8B7355','#CD853F','#DAA520','#B8860B','#808000','#6B8E23','#2E8B57','#20B2AA','#4169E1','#6A5ACD','#9932CC','#C71585','#DC143C','#FF8C00','#888','#bbb']
-def _patch_archwindow():
-    """Monkey-patch new methods and tabs into ArchWindow after class definition."""
-    import os, shutil, datetime
-    from qgis.PyQt.QtWidgets import (
-        QGraphicsView, QGraphicsScene, QGraphicsRectItem, QGraphicsTextItem,
-        QSplitter, QListWidget, QListWidgetItem
-    )
-    from qgis.PyQt.QtCore import QRectF
-    from qgis.PyQt.QtGui import QColor, QPen, QBrush, QFont
-
-    cls = ArchWindow
-
-    # ── Helpers ──────────────────────────────────────────────────────────────
-    def _log_history(self, action, table_name, record_id, details=""):
-        """Write one row to edit_history — also keeps in-memory fallback."""
-        import datetime as _dt
-        ts=_dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        user=getattr(self,'_current_user','?')
-        if not hasattr(self,'_mem_history'): self._mem_history=[]
-        self._mem_history.append([ts,user,action,f"{table_name} #{record_id}: {str(details)[:60]}"])
-        if len(self._mem_history)>500: self._mem_history=self._mem_history[-500:]
-        hlyr = self._lyr(self.hist_layer_cb) if hasattr(self,'hist_layer_cb') else None
-        if not hlyr: return
-        from qgis.core import QgsFeature
-        fields = hlyr.fields()
-        feat = QgsFeature(fields)
-        feat.setAttribute('timestamp', datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        feat.setAttribute('user_name', getattr(self,'_current_user','?'))
-        feat.setAttribute('action', action)
-        feat.setAttribute('table_name', table_name)
-        feat.setAttribute('record_id', str(record_id))
-        feat.setAttribute('details', str(details)[:500])
-        hlyr.startEditing(); hlyr.addFeature(feat); hlyr.commitChanges()
-    cls._log_history = _log_history
-
-    # Patch _write_feat to log history
-    _orig_write = cls._write_feat
-    def _write_feat_logged(self, lyr, vals, fid=None):
-        _orig_write(self, lyr, vals, fid=fid)
-        try:
-            action = 'edit' if fid is not None else 'add'
-            self._log_history(action, lyr.name(), fid or 'new', str(vals)[:200])
-        except: pass
-    cls._write_feat = _write_feat_logged
-
-    # Patch _delete_rows to log history
-    _orig_del = cls._delete_rows
-    def _delete_rows_logged(self, tbl, lyr, pfx):
-        rows=tbl.selectionModel().selectedRows()
-        fids=tbl.property("_fids") or []
-        to_del=[fids[r.row()] for r in rows if r.row()<len(fids)]
-        _orig_del(self, tbl, lyr, pfx)
-        try:
-            for fid in to_del:
-                self._log_history('delete', lyr.name(), fid, '')
-        except: pass
-    cls._delete_rows = _delete_rows_logged
-
-    # ── Drawings tab ─────────────────────────────────────────────────────────
-    def _build_drawings_tab(self):
-        from qgis.PyQt.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QComboBox,QTableWidget,QTableWidgetItem,QAbstractItemView,QHeaderView,QFileDialog
-        w=QWidget(); vl=QVBoxLayout(w)
-        # Filter
-        fr=QHBoxLayout(); fr.addWidget(QLabel("Context #:"))
-        self.draw_filter=QComboBox(); self.draw_filter.setEditable(True); self.draw_filter.addItem("All")
-        show=QPushButton("Show"); show.setObjectName("btn_secondary"); show.clicked.connect(self._reload_drawings)
-        add=QPushButton("+ Attach drawing"); add.setObjectName("btn_primary"); add.clicked.connect(self._add_drawing)
-        cad_btn=QPushButton("📐 Import CAD/DXF…"); cad_btn.setObjectName("btn_secondary"); cad_btn.clicked.connect(self._import_cad_drawing)
-        edit=QPushButton("✏ Edit"); edit.setObjectName("btn_secondary"); edit.clicked.connect(self._edit_drawing)
-        open_btn=QPushButton("📂 Open file"); open_btn.setObjectName("btn_secondary"); open_btn.clicked.connect(self._open_drawing_file)
-        del_btn=QPushButton("🗑 Delete"); del_btn.setObjectName("btn_danger")
-        del_btn.clicked.connect(lambda:self._delete_rows(self.draw_tbl,self._lyr(self.draw_layer_cb),'draw'))
-        addcol=QPushButton("＋ Col"); addcol.setObjectName("btn_ghost"); addcol.clicked.connect(lambda:self._add_field(self._lyr(self.draw_layer_cb)))
-        for b in [self.draw_filter,show,add,cad_btn,edit,open_btn,del_btn,addcol]: fr.addWidget(b)
-        vl.addLayout(fr)
-        self.draw_tbl=self._mktbl(); vl.addWidget(self.draw_tbl,1)
-        return w
-    cls._build_drawings_tab = _build_drawings_tab
-
-    def _reload_drawings(self, *a):
-        lyr=self._lyr(self.draw_layer_cb)
-        if not lyr: self.draw_tbl.setRowCount(0); return
-        flt=self.draw_filter.currentText()
-        fnames=[f.name() for f in lyr.fields()]
-        self.draw_tbl.setColumnCount(len(fnames)); self.draw_tbl.setHorizontalHeaderLabels(fnames)
-        feats=[]
-        for feat in lyr.getFeatures():
-            try:
-                if flt!="All":
-                    v=feat.attribute('context_num')
-                    if str(v)!=flt: continue
-            except: pass
-            feats.append(feat)
-        self.draw_tbl.setRowCount(len(feats)); self.draw_tbl.setProperty("_fids",[f.id() for f in feats])
-        for ri,feat in enumerate(feats):
-            for ci,fn in enumerate(fnames):
-                v=feat.attribute(fn)
-                self.draw_tbl.setItem(ri,ci,QTableWidgetItem(str(v) if v is not None else ''))
-    cls._reload_drawings = _reload_drawings
-
-    def _add_drawing(self):
-        lyr=self._lyr(self.draw_layer_cb)
-        if not lyr: QMessageBox.warning(self,"","Set drawings layer first."); return
-        path,_=QFileDialog.getOpenFileName(self,"Attach drawing","","All files (*.*)")
-        if not path: return
-        defaults={'file_path':path,'context_num':self.draw_filter.currentText() if self.draw_filter.currentText()!="All" else ''}
-        dlg=RecordDialog(self._schema_for(lyr),defaults=defaults,title="Attach Drawing",parent=self)
-        if dlg.exec_()!=QDialog.Accepted: return
-        self._write_feat(lyr,dlg.values()); self._reload_drawings()
-    cls._add_drawing = _add_drawing
-
-    def _edit_drawing(self):
-        self._edit_row('draw')
-    cls._edit_drawing = _edit_drawing
-
-    # patch _edit_row to handle 'draw'
-    _orig_edit = cls._edit_row
-    def _edit_row_ext(self, pfx):
-        if pfx=='draw':
-            tbl=self.draw_tbl; lyr=self._lyr(self.draw_layer_cb)
-            if not lyr: return
-            rows=tbl.selectionModel().selectedRows()
-            if not rows: QMessageBox.information(self,"","Select a row first."); return
-            ri=rows[0].row(); fids=tbl.property("_fids") or []
-            if ri>=len(fids): return
-            fid=fids[ri]; feat=lyr.getFeature(fid)
-            defs={f.name():feat.attribute(f.name()) for f in lyr.fields()}
-            dlg=RecordDialog(self._schema_for(lyr),defaults=defs,title="Edit Drawing",parent=self)
-            if dlg.exec_()!=QDialog.Accepted: return
-            self._write_feat(lyr,dlg.values(),fid=fid); self._reload_drawings()
-        else: _orig_edit(self,pfx)
-    cls._edit_row = _edit_row_ext
-
-    def _open_drawing_file(self):
-        rows=self.draw_tbl.selectionModel().selectedRows()
-        if not rows: return
-        ri=rows[0].row(); lyr=self._lyr(self.draw_layer_cb)
-        if not lyr: return
-        fids=self.draw_tbl.property("_fids") or []
-        if ri>=len(fids): return
-        feat=lyr.getFeature(fids[ri])
-        try: path=str(feat.attribute('file_path') or '')
-        except: path=''
-        if path and os.path.exists(path):
-            import subprocess
-            subprocess.Popen(['explorer' if os.name=='nt' else 'xdg-open', path])
-        else:
-            QMessageBox.warning(self,"","File not found: "+path)
-    cls._open_drawing_file = _open_drawing_file
-
-    # ── CAD import ───────────────────────────────────────────────────────────
-    def _import_cad_drawing(self):
-        import datetime as _dt
-        from qgis.PyQt.QtWidgets import QFileDialog, QInputDialog, QMessageBox
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Import CAD / DXF Drawing", "",
-            "CAD Files (*.dxf *.dwg *.dgn *.plt);;All files (*.*)")
-        if not path: return
-        lyr = self._lyr(self.draw_layer_cb)
-        if not lyr:
-            QMessageBox.warning(self, "No drawings layer",
-                "Connect a site first so the drawings layer is available.")
-            return
-        ctx_text, ok = QInputDialog.getText(
-            self, "Context number",
-            "Context number this drawing belongs to\n(leave blank if not applicable):")
-        ctx_num = ctx_text.strip() if ok else ''
-        scale_text, ok2 = QInputDialog.getText(
-            self, "Scale",
-            "Drawing scale (e.g. 1:20 — leave blank if unknown):")
-        scale = scale_text.strip() if ok2 else ''
-        today = _dt.date.today().isoformat()
-        vals = {
-            'drawing_type': 'CAD',
-            'file_path': path,
-            'context_num': ctx_num,
-            'scale': scale,
-            'notes': '',
-            'date_recorded': today,
-        }
-        try:
-            self._write_feat(lyr, vals)
-            self._reload_drawings()
-            try: self._log_history('import_cad', os.path.basename(path), 0, f"context {ctx_num or 'N/A'}")
-            except: pass
-            if path.lower().endswith('.dxf'):
-                from qgis.core import QgsVectorLayer, QgsProject
-                vlyr = QgsVectorLayer(path, os.path.splitext(os.path.basename(path))[0], 'ogr')
-                if vlyr.isValid():
-                    QgsProject.instance().addMapLayer(vlyr)
-                    self._msg(f"CAD drawing imported and loaded: {os.path.basename(path)}")
-                else:
-                    self._msg(f"CAD drawing recorded: {os.path.basename(path)}")
-            else:
-                self._msg(f"CAD drawing recorded: {os.path.basename(path)}")
-        except Exception as e:
-            QMessageBox.critical(self, "Import error", str(e))
-    cls._import_cad_drawing = _import_cad_drawing
-
-    # ── Gallery persistence ──────────────────────────────────────────────────
-    def _get_media_json_path(self):
-        for cb_name in ['ctx_layer_cb', 'hist_layer_cb', 'pot_layer_cb']:
-            cb = getattr(self, cb_name, None)
-            if cb is None: continue
-            lyr = self._lyr(cb)
-            if not lyr: continue
-            src = lyr.dataProvider().dataSourceUri()
-            gpkg = src.split('|')[0]
-            if gpkg.endswith('.gpkg') and os.path.exists(gpkg):
-                return gpkg + '.media.json'
-        return None
-    cls._get_media_json_path = _get_media_json_path
-
-    def _save_gallery_registry(self):
-        path = self._get_media_json_path()
-        if not path: return
-        try:
-            import json
-            if not hasattr(self, '_photo_registry'):
-                self._photo_registry = {}
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(self._photo_registry, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
-    cls._save_gallery_registry = _save_gallery_registry
-
-    def _load_gallery_registry(self):
-        path = self._get_media_json_path()
-        if not path or not os.path.exists(path): return
-        try:
-            import json
-            with open(path, 'r', encoding='utf-8') as f:
-                reg = json.load(f)
-        except Exception:
-            return
-        if not isinstance(reg, dict): return
-        self._photo_registry = reg
-        from qgis.PyQt.QtWidgets import QListWidgetItem, QLabel
-        from qgis.PyQt.QtGui import QPixmap, QIcon
-        from qgis.PyQt.QtCore import Qt as _Qt
-        galleries = getattr(self, '_gallery_widgets', {})
-        for category, items in reg.items():
-            gallery = galleries.get(category)
-            if gallery is None: continue
-            gallery.clear()
-            files = []
-            for entry in items:
-                fpath = entry.get('path', '')
-                caption = entry.get('caption', os.path.basename(fpath) if fpath else '')
-                context = entry.get('context', '')
-                files.append(fpath)
-                item = QListWidgetItem()
-                display = f"{caption}\n📍 Context {context}" if context else caption
-                item.setText(display)
-                item.setToolTip(fpath + (f"\n📍 Context {context}" if context else ''))
-                px = QPixmap(fpath)
-                if not px.isNull():
-                    item.setIcon(QIcon(px.scaled(120, 90, _Qt.KeepAspectRatio, _Qt.SmoothTransformation)))
-                else:
-                    icon_lbl = "📄" if fpath.lower().endswith(('.pdf', '.docx', '.xlsx')) else "📐"
-                    item.setText(f"{icon_lbl}\n{display}")
-                gallery.addItem(item)
-            gallery.setProperty("_files", files)
-            parent = gallery.parent()
-            if parent:
-                for lbl in parent.findChildren(QLabel, "statusMsg"):
-                    lbl.setText(f"{len(files)} file(s) attached" if files else
-                                "No files added — click ＋ Add file to attach photos")
-                    break
-    cls._load_gallery_registry = _load_gallery_registry
-
-    # ── Statistics tab ────────────────────────────────────────────────────────
-    def _build_stats_tab(self):
-        from qgis.PyQt.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
-                                          QPushButton, QScrollArea, QLabel, QFrame)
-        w = QWidget(); w.setStyleSheet("background:transparent;")
-        vl = QVBoxLayout(w); vl.setContentsMargins(0, 0, 0, 0); vl.setSpacing(0)
-
-        vl.addWidget(ContentTitle("Statistics",
-                                  "Record counts and distributions across context types, periods and find categories"))
-
-        ab = QWidget(); ab.setObjectName("actionBar")
-        hdr = QHBoxLayout(ab); hdr.setContentsMargins(24, 6, 24, 6); hdr.setSpacing(8)
-        refresh = QPushButton("↻ Refresh statistics"); refresh.setObjectName("btn_secondary")
-        refresh.clicked.connect(self._refresh_stats)
-        hdr.addWidget(refresh); hdr.addStretch()
-        vl.addWidget(ab)
-
-        self._stats_scroll = QScrollArea()
-        self._stats_scroll.setWidgetResizable(True)
-        self._stats_scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
-        self._stats_inner = QWidget(); self._stats_inner.setStyleSheet("background:transparent;")
-        self._stats_vl = QVBoxLayout(self._stats_inner)
-        self._stats_vl.setContentsMargins(32, 20, 32, 32); self._stats_vl.setSpacing(4)
-        ph = QLabel("Click  ↻ Refresh statistics  to generate the charts")
-        ph.setObjectName("emptyState"); ph.setAlignment(Qt.AlignCenter)
-        self._stats_vl.addWidget(ph); self._stats_vl.addStretch()
-        self._stats_scroll.setWidget(self._stats_inner)
-        vl.addWidget(self._stats_scroll, 1)
-        self.tabs.addTab(w, "Statistics")
-    cls._build_stats_tab = _build_stats_tab
-
-    def _refresh_stats(self):
-        from qgis.PyQt.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QFrame
-        # Clear
-        while self._stats_vl.count():
-            it = self._stats_vl.takeAt(0)
-            if it.widget(): it.widget().deleteLater()
-
-        _tc = getattr(self, '_current_theme', LIGHT_CLR)
-        palette = ['#5a8abf','#c8a860','#7ab87a','#e07820','#a050a0','#60b0b0',
-                   '#3db5c8','#d4845a','#88b04b','#b07cc6']
-
-        datasets = [
-            ("Context Types",      self._count_by_field(self.ctx_layer_cb, 'type')),
-            ("Pottery Forms",      self._count_by_field(self.pot_layer_cb, 'form')),
-            ("Artifact Types",     self._count_by_field(self.art_layer_cb, 'type')),
-            ("Periods — Contexts", self._count_by_field(self.ctx_layer_cb, 'period')),
-        ]
-
-        has_data = False
-        for ds_idx, (title, counts) in enumerate(datasets):
-            if not counts:
-                continue
-            has_data = True
-
-            # Section header with record count
-            sec_w = QWidget(); sec_w.setStyleSheet("background:transparent;")
-            sec_h = QHBoxLayout(sec_w); sec_h.setContentsMargins(0, 16 if ds_idx else 0, 0, 6)
-            sec_lbl = QLabel(title); sec_lbl.setObjectName("h4")
-            total_lbl = QLabel(f"{sum(counts.values())} records")
-            total_lbl.setObjectName("mutedXs")
-            sec_h.addWidget(sec_lbl); sec_h.addStretch(); sec_h.addWidget(total_lbl)
-            self._stats_vl.addWidget(sec_w)
-
-            mx = max(counts.values())
-            total = sum(counts.values())
-            sorted_items = sorted(counts.items(), key=lambda x: -x[1])[:15]
-
-            for ci, (label, count) in enumerate(sorted_items):
-                color = palette[ci % len(palette)]
-
-                row_w = QWidget(); row_w.setStyleSheet("background:transparent;")
-                row_h = QHBoxLayout(row_w)
-                row_h.setContentsMargins(0, 2, 0, 2); row_h.setSpacing(10)
-
-                # Category label (right-aligned, fixed width)
-                name_lbl = QLabel(str(label)[:26])
-                name_lbl.setFixedWidth(190)
-                name_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                name_lbl.setObjectName("bodyText")
-                row_h.addWidget(name_lbl)
-
-                # Bar — fills proportional width using layout stretch
-                track = QWidget(); track.setStyleSheet("background:transparent;")
-                track_h = QHBoxLayout(track)
-                track_h.setContentsMargins(0, 0, 0, 0); track_h.setSpacing(0)
-                bar = QFrame(); bar.setFixedHeight(22)
-                bar.setStyleSheet(
-                    f"background:{color};border-radius:4px;")
-                pct_int = max(2, int(count * 1000 / mx))
-                rest = max(0, 1000 - pct_int)
-                track_h.addWidget(bar, pct_int)
-                if rest:
-                    sp = QWidget(); sp.setStyleSheet("background:transparent;")
-                    track_h.addWidget(sp, rest)
-                row_h.addWidget(track, 1)
-
-                # Count + percentage
-                cnt_lbl = QLabel(f"{count}  ({100*count//total}%)")
-                cnt_lbl.setObjectName("mutedXs")
-                cnt_lbl.setFixedWidth(80)
-                row_h.addWidget(cnt_lbl)
-
-                self._stats_vl.addWidget(row_w)
-
-            # Thin separator
-            sep = QFrame(); sep.setObjectName("hsep")
-            sep_wrap = QWidget(); sep_wrap.setStyleSheet("background:transparent;")
-            sep_vl = QVBoxLayout(sep_wrap); sep_vl.setContentsMargins(0, 8, 0, 0)
-            sep_vl.addWidget(sep)
-            self._stats_vl.addWidget(sep_wrap)
-
-        if not has_data:
-            empty = QLabel("No data — connect layers and load a project first")
-            empty.setObjectName("emptyState"); empty.setAlignment(Qt.AlignCenter)
-            self._stats_vl.addWidget(empty)
-
-        self._stats_vl.addStretch()
-    cls._refresh_stats = _refresh_stats
-
-    def _count_by_field(self, layer_cb, field_name):
-        lyr=self._lyr(layer_cb)
-        if not lyr: return {}
-        fnames=[f.name() for f in lyr.fields()]
-        if field_name not in fnames: return {}
-        counts={}
-        for feat in lyr.getFeatures():
-            v=str(feat.attribute(field_name) or 'Unknown').strip()
-            if v.lower() in ('null','none',''): v='Unknown'
-            counts[v]=counts.get(v,0)+1
-        return counts
-    cls._count_by_field = _count_by_field
-
-    # ── Timeline tab ─────────────────────────────────────────────────────────
-    def _build_timeline_tab(self):
-        from qgis.PyQt.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
-                                          QPushButton, QScrollArea, QLabel, QFrame)
-        w = QWidget(); w.setStyleSheet("background:transparent;")
-        vl = QVBoxLayout(w); vl.setContentsMargins(0, 0, 0, 0); vl.setSpacing(0)
-
-        vl.addWidget(ContentTitle("Timeline",
-                                  "Stratigraphic period sequence — contexts, pottery and artifacts by era"))
-
-        ab = QWidget(); ab.setObjectName("actionBar")
-        hdr = QHBoxLayout(ab); hdr.setContentsMargins(24, 6, 24, 6); hdr.setSpacing(8)
-        refresh = QPushButton("↻ Build timeline"); refresh.setObjectName("btn_secondary")
-        refresh.clicked.connect(self._refresh_timeline)
-        hdr.addWidget(refresh); hdr.addStretch()
-        vl.addWidget(ab)
-
-        self._tl_scroll = QScrollArea()
-        self._tl_scroll.setWidgetResizable(True)
-        self._tl_scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
-        self._tl_inner = QWidget(); self._tl_inner.setStyleSheet("background:transparent;")
-        self._tl_vl = QVBoxLayout(self._tl_inner)
-        self._tl_vl.setContentsMargins(32, 20, 32, 32); self._tl_vl.setSpacing(4)
-        ph = QLabel("Click  ↻ Build timeline  to generate the period chart")
-        ph.setObjectName("emptyState"); ph.setAlignment(Qt.AlignCenter)
-        self._tl_vl.addWidget(ph); self._tl_vl.addStretch()
-        self._tl_scroll.setWidget(self._tl_inner)
-        vl.addWidget(self._tl_scroll, 1)
-        self.tabs.addTab(w, "Timeline")
-    cls._build_timeline_tab = _build_timeline_tab
-
-    PERIOD_ORDER=[
-        'Prehistoric','Early Bronze Age','Middle Bronze Age','Late Bronze Age',
-        'Iron Age','Persian','Hellenistic','Roman','Byzantine','Early Islamic',
-        'Crusader','Medieval','Mamluk','Ottoman','Modern','Unknown'
-    ]
-    PERIOD_COLORS=[
-        '#8B7355','#CD853F','#DAA520','#B8860B','#808000','#6B8E23','#2E8B57',
-        '#20B2AA','#4169E1','#6A5ACD','#9932CC','#C71585','#DC143C','#FF8C00',
-        '#888','#999'
-    ]
-
-    def _refresh_timeline(self):
-        from qgis.PyQt.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QFrame
-        # Clear
-        while self._tl_vl.count():
-            it = self._tl_vl.takeAt(0)
-            if it.widget(): it.widget().deleteLater()
-
-        _tc = getattr(self, '_current_theme', LIGHT_CLR)
-
-        # Collect period counts from all layers
-        period_counts = {}
-        for lcb, nf in [(self.ctx_layer_cb, 'period'),
-                        (self.pot_layer_cb,  'period'),
-                        (self.art_layer_cb,  'period')]:
-            lyr = self._lyr(lcb)
-            if not lyr: continue
-            fnames = [f.name() for f in lyr.fields()]
-            if nf not in fnames:
-                nf = next((f for f in fnames if 'period' in f.lower() or 'date' in f.lower()), None)
-                if not nf: continue
-            for feat in lyr.getFeatures():
-                v = str(feat.attribute(nf) or '').strip()
-                if v.lower() in ('null', 'none', ''): continue
-                period_counts[v] = period_counts.get(v, 0) + 1
-
-        if not period_counts:
-            empty = QLabel("No period data found — map the period fields in Layer Configuration")
-            empty.setObjectName("emptyState"); empty.setAlignment(Qt.AlignCenter)
-            self._tl_vl.addWidget(empty); self._tl_vl.addStretch()
-            return
-
-        def sort_key(p):
-            try: return PERIOD_ORDER.index(p)
-            except: return len(PERIOD_ORDER) + (ord(p[0]) if p else 999)
-
-        sorted_periods = sorted(period_counts.keys(), key=sort_key)
-        total = sum(period_counts.values())
-        mx = max(period_counts.values())
-
-        # Summary row
-        summ_w = QWidget(); summ_w.setStyleSheet("background:transparent;")
-        summ_h = QHBoxLayout(summ_w); summ_h.setContentsMargins(0, 0, 0, 12)
-        summ_lbl = QLabel(f"  {total} total records  ·  {len(sorted_periods)} periods")
-        summ_lbl.setObjectName("muted")
-        summ_h.addWidget(summ_lbl); summ_h.addStretch()
-        self._tl_vl.addWidget(summ_w)
-
-        for pi, period in enumerate(sorted_periods):
-            count = period_counts[period]
-            color = PERIOD_COLORS[pi % len(PERIOD_COLORS)]
-
-            row_w = QWidget(); row_w.setStyleSheet("background:transparent;")
-            row_h = QHBoxLayout(row_w)
-            row_h.setContentsMargins(0, 2, 0, 2); row_h.setSpacing(0)
-
-            # Left colour strip (period identity)
-            strip = QFrame(); strip.setFixedWidth(5); strip.setFixedHeight(30)
-            strip.setStyleSheet(f"background:{color};border-radius:2px;")
-            row_h.addWidget(strip)
-            row_h.addSpacing(10)
-
-            # Period label
-            per_lbl = QLabel(period)
-            per_lbl.setFixedWidth(210)
-            per_lbl.setObjectName("bodyText")
-            per_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            row_h.addWidget(per_lbl)
-
-            # Proportional bar track
-            track = QWidget(); track.setStyleSheet("background:transparent;")
-            track_h = QHBoxLayout(track)
-            track_h.setContentsMargins(0, 4, 0, 4); track_h.setSpacing(0)
-            bar = QFrame()
-            bar.setStyleSheet(
-                f"background:{color};border-radius:4px;opacity:0.85;")
-            pct_int = max(2, int(count * 1000 / mx))
-            rest = max(0, 1000 - pct_int)
-            track_h.addWidget(bar, pct_int)
-            if rest:
-                sp = QWidget(); sp.setStyleSheet("background:transparent;")
-                track_h.addWidget(sp, rest)
-            row_h.addWidget(track, 1)
-            row_h.addSpacing(10)
-
-            # Count + %
-            cnt_lbl = QLabel(f"{count}  ({100*count//total}%)")
-            cnt_lbl.setObjectName("mutedXs")
-            cnt_lbl.setFixedWidth(90)
-            cnt_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            row_h.addWidget(cnt_lbl)
-
-            self._tl_vl.addWidget(row_w)
-
-        self._tl_vl.addStretch()
-    cls._refresh_timeline = _refresh_timeline
-
-    # ── History tab ───────────────────────────────────────────────────────────
-    def _build_history_tab(self):
-        from qgis.PyQt.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QPushButton,QLineEdit,QLabel
-        w = QWidget(); w.setStyleSheet("background:transparent;")
-        vl = QVBoxLayout(w); vl.setContentsMargins(0, 0, 0, 0); vl.setSpacing(0)
-
-        vl.addWidget(ContentTitle("Edit History",
-                                  "Audit trail of all data changes in this project"))
-
-        # Action bar
-        ab = QWidget(); ab.setObjectName("actionBar")
-        hdr = QHBoxLayout(ab); hdr.setContentsMargins(24, 6, 24, 6); hdr.setSpacing(8)
-
-        # User pill
-        user_lbl = QLabel("User:"); user_lbl.setObjectName("mutedXs")
-        self._hist_dot = QLabel("●"); self._hist_dot.setObjectName("accentLabel")
-        self.user_input = QLineEdit(self._current_user)
-        self.user_input.setMaximumWidth(160); self.user_input.setObjectName("histUserInput")
-        self.user_input.textChanged.connect(lambda t: setattr(self, '_current_user', t))
-
-        refresh = QPushButton("↻ Refresh"); refresh.setObjectName("btn_secondary")
-        refresh.clicked.connect(self._load_history)
-        clear = QPushButton("🗑 Clear history"); clear.setObjectName("btn_danger")
-        clear.clicked.connect(self._clear_history)
-
-        hdr.addWidget(self._hist_dot); hdr.addWidget(user_lbl)
-        hdr.addWidget(self.user_input); hdr.addWidget(refresh)
-        hdr.addWidget(clear); hdr.addStretch()
-        vl.addWidget(ab)
-
-        tbl_w = QWidget(); tbl_w.setStyleSheet("background:transparent;")
-        tbl_vl = QVBoxLayout(tbl_w); tbl_vl.setContentsMargins(16, 8, 16, 16)
-        self.hist_tbl = self._mktbl()
-        tbl_vl.addWidget(self.hist_tbl)
-        vl.addWidget(tbl_w, 1)
-        self.tabs.addTab(w, "History")
-    cls._build_history_tab = _build_history_tab
-
-    def _load_history(self):
-        lyr=self._lyr(self.hist_layer_cb)
-        if not lyr:
-            # Show in-memory log if no layer connected
-            mem=getattr(self,'_mem_history',[])
-            self.hist_tbl.setColumnCount(4)
-            self.hist_tbl.setHorizontalHeaderLabels(["Timestamp","User","Action","Details"])
-            self.hist_tbl.setRowCount(max(1,len(mem)))
-            if not mem:
-                self.hist_tbl.setItem(0,0,QTableWidgetItem("No edit_history layer connected"))
-                self.hist_tbl.setItem(0,1,QTableWidgetItem("Create a project or connect the edit_history layer"))
-                self.hist_tbl.setSpan(0,0,1,1)
-                for c in range(1,4): self.hist_tbl.setItem(0,c,QTableWidgetItem(""))
-            else:
-                for ri,row in enumerate(reversed(mem)):
-                    for ci,v in enumerate(row): self.hist_tbl.setItem(ri,ci,QTableWidgetItem(str(v)))
-            return
-        fnames=[f.name() for f in lyr.fields()]
-        feats=list(lyr.getFeatures())
-        feats.sort(key=lambda f: str(f.attribute('timestamp') or ''),reverse=True)
-        self.hist_tbl.setColumnCount(len(fnames)); self.hist_tbl.setHorizontalHeaderLabels(fnames)
-        if not feats:
-            self.hist_tbl.setRowCount(1)
-            self.hist_tbl.setItem(0,0,QTableWidgetItem("No history recorded yet — actions will appear here as you add/edit data"))
-            for c in range(1,len(fnames)): self.hist_tbl.setItem(0,c,QTableWidgetItem(""))
-            return
-        self.hist_tbl.setRowCount(len(feats)); self.hist_tbl.setProperty("_fids",[f.id() for f in feats])
-        for ri,feat in enumerate(feats):
-            for ci,fn in enumerate(fnames):
-                v=feat.attribute(fn)
-                self.hist_tbl.setItem(ri,ci,QTableWidgetItem(str(v) if v is not None else ''))
-    cls._load_history = _load_history
-
-    def _clear_history(self):
-        lyr=self._lyr(self.hist_layer_cb)
-        if not lyr: return
-        reply=QMessageBox.question(self,"Clear history","Delete all history records?",
-            QMessageBox.Yes|QMessageBox.No)
-        if reply!=QMessageBox.Yes: return
-        lyr.startEditing()
-        lyr.deleteFeatures([f.id() for f in lyr.getFeatures()])
-        lyr.commitChanges(); self._load_history()
-    cls._clear_history = _clear_history
-
-    # ── Backup ───────────────────────────────────────────────────────────────
-    def _backup_project(self):
-        gpkg=None
-        lyr=self._lyr(self.ctx_layer_cb)
-        if lyr:
-            uri=lyr.dataProvider().dataSourceUri()
-            if '|' in uri: gpkg=uri.split('|')[0]
-        if not gpkg or not os.path.exists(gpkg):
-            gpkg,_=QFileDialog.getOpenFileName(self,"Select GeoPackage to back up","","GeoPackage (*.gpkg)")
-            if not gpkg: return
-        ts=datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        backup=gpkg.replace('.gpkg',f'_backup_{ts}.gpkg')
-        shutil.copy2(gpkg,backup)
-        # Also back up the media sidecar if it exists
-        media_src = gpkg + '.media.json'
-        if os.path.exists(media_src):
-            shutil.copy2(media_src, backup + '.media.json')
-        self._msg(f"Backup saved: {os.path.basename(backup)}")
-        QMessageBox.information(self,"Backup complete",f"Saved to:\n{backup}")
-    cls._backup_project = _backup_project
-
-    # ── Per-context PDF ────────────────────────────────────────────────────────
-    def _export_context_pdf(self):
-        num_str=self.ctxdet_cb.currentText().strip() if hasattr(self,'ctxdet_cb') else ''
-        if not num_str: QMessageBox.warning(self,"","Open Context View tab and select a context first."); return
-        try: num=int(num_str)
-        except: QMessageBox.warning(self,"","Context number must be integer."); return
-        path,_=QFileDialog.getSaveFileName(self,f"Export Context {num} PDF",
-            f"context_{num}.pdf","PDF (*.pdf)")
-        if not path: return
-        from .pdf_export import _export_context_page
-        ok=_export_context_page(path,num,self)
-        if ok: self._msg(f"Context {num} exported to PDF")
-        else: QMessageBox.warning(self,"","Export failed")
-    cls._export_context_pdf = _export_context_pdf
-
-    # ── Load all extension ─────────────────────────────────────────────────────
-    _orig_load_all = cls._load_all
-    def _load_all_ext(self):
-        _orig_load_all(self)
-        if hasattr(self,'draw_filter'):
-            self.draw_filter.clear(); self.draw_filter.addItem("All")
-            for n in sorted(self.ctx_data.keys()): self.draw_filter.addItem(str(n))
-        if hasattr(self,'hist_tbl'): self._load_history()
-    cls._load_all = _load_all_ext
-
-_patch_archwindow()
-
-
-# ── Archaeologist Filter tab (appended) ──────────────────────────────────────
-def _build_archaeologist_tab_and_patch():
-    """Add archaeologist filter tab to ArchWindow."""
-    cls = ArchWindow
-
-    def _build_archaeologist_tab(self):
-        from qgis.PyQt.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox
-        w = QWidget(); w.setStyleSheet("background:transparent;")
-        vl = QVBoxLayout(w); vl.setContentsMargins(0, 0, 0, 0); vl.setSpacing(0)
-
-        vl.addWidget(ContentTitle("By Archaeologist",
-                                  "Filter all data by recorder — see every record made by one person"))
-
-        body = QWidget(); body.setStyleSheet("background:transparent;")
-        bv = QVBoxLayout(body); bv.setContentsMargins(32, 12, 32, 16); bv.setSpacing(12)
-
-        # Info
-        info_frame = QFrame(); info_frame.setObjectName("infoCard")
-        il = QHBoxLayout(info_frame); il.setContentsMargins(14, 10, 14, 10)
-        info = QLabel("Select which field holds the archaeologist's initials, then pick a name. "
-                      "All tables below update to show only their records.")
-        info.setWordWrap(True)
-        il.addWidget(info)
-        bv.addWidget(info_frame)
-
-        # Field pickers per layer
-        cfg_grp = QGroupBox("Which field identifies the recorder?")
-        cf = QFormLayout(cfg_grp); cf.setSpacing(6); cf.setContentsMargins(16, 10, 16, 10)
-        self.arch_ctx_field   = QComboBox(); self.arch_ctx_field.setEditable(True)
-        self.arch_pot_field   = QComboBox(); self.arch_pot_field.setEditable(True)
-        self.arch_art_field   = QComboBox(); self.arch_art_field.setEditable(True)
-        self.arch_ske_field   = QComboBox(); self.arch_ske_field.setEditable(True)
-        for cb in [self.arch_ctx_field, self.arch_pot_field, self.arch_art_field, self.arch_ske_field]:
-            cb.addItem("— none —")
-        cf.addRow(QLabel("Context field:"),  self.arch_ctx_field)
-        cf.addRow(QLabel("Pottery field:"),  self.arch_pot_field)
-        cf.addRow(QLabel("Artifact field:"), self.arch_art_field)
-        cf.addRow(QLabel("Skeleton field:"), self.arch_ske_field)
-        bv.addWidget(cfg_grp)
-
-        # Person selector + action buttons
-        sel_row = QHBoxLayout(); sel_row.setSpacing(8)
-        sel_lbl = QLabel("Archaeologist:"); sel_lbl.setObjectName("mutedXs")
-        self.arch_person_cb = QComboBox(); self.arch_person_cb.setEditable(True)
-        self.arch_person_cb.setMinimumWidth(180)
-        scan_btn = QPushButton("↻ Scan names"); scan_btn.setObjectName("btn_ghost")
-        scan_btn.clicked.connect(self._scan_archaeologists)
-        filter_btn = QPushButton("🔍 Filter tables"); filter_btn.setObjectName("btn_primary")
-        filter_btn.clicked.connect(self._apply_archaeologist_filter)
-        clear_btn = QPushButton("✕ Clear"); clear_btn.setObjectName("btn_danger")
-        clear_btn.clicked.connect(self._clear_archaeologist_filter)
-        for w_ in (sel_lbl, self.arch_person_cb, scan_btn, filter_btn, clear_btn):
-            sel_row.addWidget(w_)
-        sel_row.addStretch()
-        bv.addLayout(sel_row)
-
-        self.arch_status = QLabel(""); self.arch_status.setObjectName("statusMsg")
-        bv.addWidget(self.arch_status)
-        vl.addWidget(body)
-
-        # Results sub-tabs
-        self.arch_tabs = QTabWidget(); self.arch_tabs.setObjectName("subTabs")
-        self.arch_ctx_tbl = self._mktbl(); self.arch_tabs.addTab(self.arch_ctx_tbl,  "📋 Contexts")
-        self.arch_pot_tbl = self._mktbl(); self.arch_tabs.addTab(self.arch_pot_tbl,  "🏺 Pottery")
-        self.arch_art_tbl = self._mktbl(); self.arch_tabs.addTab(self.arch_art_tbl,  "⚱ Artifacts")
-        self.arch_ske_tbl = self._mktbl(); self.arch_tabs.addTab(self.arch_ske_tbl,  "💀 Skeletons")
-        vl.addWidget(self.arch_tabs, 1)
-        self.tabs.addTab(w, "By Archaeologist")
-
-    cls._build_archaeologist_tab = _build_archaeologist_tab
-
-    def _populate_arch_fields(self):
-        """Fill the field combos with fields from each layer."""
-        for lyr_cb, field_cb, candidates in [
-            (self.ctx_layer_cb, self.arch_ctx_field,
-             ['initials','recorded_by','user','archaeologist','fieldworker','recorder','by','user_name']),
-            (self.pot_layer_cb, self.arch_pot_field,
-             ['initials','recorded_by','user','archaeologist','fieldworker','recorder','by','user_name']),
-            (self.art_layer_cb, self.arch_art_field,
-             ['initials','recorded_by','user','archaeologist','fieldworker','recorder','by','user_name']),
-            (self.ske_layer_cb, self.arch_ske_field,
-             ['initials','recorded_by','user','archaeologist','fieldworker','recorder','by','user_name']),
-        ]:
-            lyr = self._lyr(lyr_cb)
-            if not lyr: continue
-            fnames = [f.name() for f in lyr.fields()]
-            field_cb.clear(); field_cb.addItem("— none —"); field_cb.addItems(fnames)
-            for c in candidates:
-                for fn in fnames:
-                    if c.lower() in fn.lower():
-                        idx = field_cb.findText(fn)
-                        if idx >= 0: field_cb.setCurrentIndex(idx); break
-    cls._populate_arch_fields = _populate_arch_fields
-
-    def _scan_archaeologists(self):
-        """Collect all unique values from the recorder fields."""
-        self._populate_arch_fields()
-        people = set()
-        for lyr_cb, field_cb in [
-            (self.ctx_layer_cb, self.arch_ctx_field),
-            (self.pot_layer_cb, self.arch_pot_field),
-            (self.art_layer_cb, self.arch_art_field),
-            (self.ske_layer_cb, self.arch_ske_field),
-        ]:
-            lyr = self._lyr(lyr_cb)
-            fn  = field_cb.currentText()
-            if not lyr or fn == "— none —": continue
-            for feat in lyr.getFeatures():
-                v = str(feat.attribute(fn) or "").strip()
-                if v and v.lower() not in ("null","none",""): people.add(v)
-        self.arch_person_cb.clear()
-        for p in sorted(people): self.arch_person_cb.addItem(p)
-        self.arch_status.setText(f"Found {len(people)} archaeologist(s): {', '.join(sorted(people))}")
-    cls._scan_archaeologists = _scan_archaeologists
-
-    def _apply_archaeologist_filter(self):
-        person = self.arch_person_cb.currentText().strip()
-        if not person: QMessageBox.warning(self,"","Select or type an archaeologist name/initials."); return
-
-        total = 0
-        for lyr_cb, field_cb, tbl, tbl_name in [
-            (self.ctx_layer_cb, self.arch_ctx_field, self.arch_ctx_tbl,  "contexts"),
-            (self.pot_layer_cb, self.arch_pot_field, self.arch_pot_tbl,  "pottery"),
-            (self.art_layer_cb, self.arch_art_field, self.arch_art_tbl,  "artifacts"),
-            (self.ske_layer_cb, self.arch_ske_field, self.arch_ske_tbl,  "skeletons"),
-        ]:
-            tbl.clearContents(); tbl.setRowCount(0)
-            lyr = self._lyr(lyr_cb); fn = field_cb.currentText()
-            if not lyr or fn == "— none —":
-                tbl.setColumnCount(1)
-                tbl.setHorizontalHeaderLabels([f"No layer/field set for {tbl_name}"])
-                continue
-            fnames = [f.name() for f in lyr.fields()]
-            tbl.setColumnCount(len(fnames)); tbl.setHorizontalHeaderLabels(fnames)
-            feats = [f for f in lyr.getFeatures()
-                     if str(f.attribute(fn) or "").strip().lower() == person.lower()]
-            tbl.setRowCount(len(feats)); tbl.setProperty("_fids",[f.id() for f in feats])
-            for ri, feat in enumerate(feats):
-                for ci, fname in enumerate(fnames):
-                    v = feat.attribute(fname)
-                    tbl.setItem(ri, ci, QTableWidgetItem(str(v) if v is not None else ""))
-            total += len(feats)
-
-        self.arch_status.setText(f"Showing {total} records for '{person}'")
-        self._msg(f"Filter: {total} records for {person}")
-    cls._apply_archaeologist_filter = _apply_archaeologist_filter
-
-    def _clear_archaeologist_filter(self):
-        for tbl in [self.arch_ctx_tbl, self.arch_pot_tbl,
-                    self.arch_art_tbl, self.arch_ske_tbl]:
-            tbl.clearContents(); tbl.setRowCount(0)
-        self.arch_status.setText("Filter cleared")
-    cls._clear_archaeologist_filter = _clear_archaeologist_filter
-
-_build_archaeologist_tab_and_patch()
-
-
-# ── Grid Map Tab ──────────────────────────────────────────────────────────────
-def _build_grid_map_tab_and_patch():
-    import os
-    cls = ArchWindow
-
-    def _create_grid_layer(self):
-        """Create excavation_grids polygon layer in existing GeoPackage."""
-        path,_=QFileDialog.getOpenFileName(self,"Select GeoPackage","","GeoPackage (*.gpkg)")
-        if not path: return
-        schema=SCHEMAS.get('excavation_grids',[])
-        fields=QgsFields()
-        for fname,ftype in schema: fields.append(QgsField(fname,ftype))
-        opts=QgsVectorFileWriter.SaveVectorOptions()
-        opts.driverName='GPKG'; opts.fileEncoding='UTF-8'
-        opts.layerName='excavation_grids'
-        opts.actionOnExistingFile=QgsVectorFileWriter.CreateOrOverwriteLayer
-        QgsVectorFileWriter.create(path,fields,QgsWkbTypes.Polygon,
-            QgsCoordinateReferenceSystem('EPSG:4326'),
-            QgsCoordinateTransformContext(),opts)
-        uri=f"{path}|layername=excavation_grids"
-        site=getattr(self,'_current_site','SITE')
-        lyr=QgsVectorLayer(uri,f"{site}_excavation_grids",'ogr')
-        if lyr.isValid():
-            # Apply a nice default style
-            from qgis.core import QgsSimpleFillSymbolLayer, QgsSingleSymbolRenderer, QgsSymbol
-            sym=QgsSymbol.defaultSymbol(QgsWkbTypes.PolygonGeometry)
-            sym.setOpacity(0.6)
-            fl=sym.symbolLayer(0)
-            fl.setColor(QColor(180,210,240,140))
-            fl.setStrokeColor(QColor(30,80,160))
-            fl.setStrokeWidth(0.8)
-            lyr.setRenderer(QgsSingleSymbolRenderer(sym))
-            # Label by grid_name
-            from qgis.core import QgsPalLayerSettings, QgsVectorLayerSimpleLabeling, QgsTextFormat
-            lbl=QgsPalLayerSettings()
-            lbl.fieldName='grid_name'; lbl.enabled=True
-            fmt=QgsTextFormat(); fmt.setSize(9)
-            lbl.setFormat(fmt)
-            lyr.setLabeling(QgsVectorLayerSimpleLabeling(lbl))
-            lyr.setLabelsEnabled(True)
-            QgsProject.instance().addMapLayer(lyr)
-            self._refresh_combos()
-            for i in range(self.grid_layer_cb.count()):
-                if 'excavation_grids' in self.grid_layer_cb.itemText(i).lower():
-                    self.grid_layer_cb.setCurrentIndex(i); break
-            self._msg("excavation_grids layer created and styled")
-            QMessageBox.information(self,"Done",
-                "Excavation grids layer created.\n\n"
-                "Use 'Start drawing' to digitize grids on the map,\n"
-                "or toggle layer editing in QGIS and use the polygon digitizing tool.")
-        else:
-            QMessageBox.warning(self,"","Failed to create layer.")
-    cls._create_grid_layer = _create_grid_layer
-
-    def _build_grid_map_tab(self):
-        from qgis.PyQt.QtWidgets import (
-            QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-            QGroupBox, QFormLayout, QLineEdit, QDoubleSpinBox, QSplitter
-        )
-        w=QWidget(); vl=QVBoxLayout(w); vl.setContentsMargins(6,6,6,6); vl.setSpacing(6)
-
-        # Header
-        hdr=QLabel("⬡  Excavation Grid Map")
-        hdr.setObjectName("h3")
-        vl.addWidget(hdr)
-
-        # Top controls
-        top=QHBoxLayout()
-        draw_btn=QPushButton("✏  Start drawing grid on map")
-        draw_btn.setObjectName("btn_primary")
-        draw_btn.clicked.connect(self._start_grid_drawing)
-        stop_btn=QPushButton("⏹ Stop drawing")
-        stop_btn.setObjectName("btn_danger")
-        stop_btn.clicked.connect(self._stop_grid_drawing)
-        zoom_btn=QPushButton("🔍 Zoom to grids")
-        zoom_btn.setObjectName("btn_ghost")
-        zoom_btn.clicked.connect(self._zoom_to_grids)
-        export_btn=QPushButton("📄 Export grid map")
-        export_btn.setObjectName("btn_purple")
-        export_btn.clicked.connect(self._export_grid_map)
-        for b in [draw_btn,stop_btn,zoom_btn,export_btn]: top.addWidget(b)
-        vl.addLayout(top)
-
-        # Split: form left, grid table right
-        split=QSplitter(Qt.Horizontal)
-
-        # Left: metadata form for new/selected grid
-        form_w=QWidget(); form_v=QVBoxLayout(form_w)
-        form_v.addWidget(QLabel("<b>Grid metadata</b><br><small>Fill in then click Add Grid</small>"))
-        ff=QFormLayout(); ff.setSpacing(4)
-        self.grid_name_input  =QLineEdit(); self.grid_name_input.setPlaceholderText("e.g. Square A1")
-        self.grid_site_input  =QLineEdit(); self.grid_site_input.setText(getattr(self,'_current_site',''))
-        self.grid_season_input=QLineEdit(); self.grid_season_input.setPlaceholderText("e.g. 2025")
-        self.grid_elev_input  =QDoubleSpinBox(); self.grid_elev_input.setRange(-200,4000); self.grid_elev_input.setDecimals(1)
-        self.grid_notes_input =QLineEdit()
-        ff.addRow("Grid name:", self.grid_name_input)
-        ff.addRow("Site:",      self.grid_site_input)
-        ff.addRow("Season:",    self.grid_season_input)
-        ff.addRow("Elevation:", self.grid_elev_input)
-        ff.addRow("Notes:",     self.grid_notes_input)
-        form_v.addLayout(ff)
-        add_btn=QPushButton("＋ Add grid (draws next polygon)")
-        add_btn.setObjectName("btn_primary")
-        add_btn.clicked.connect(self._add_grid_record)
-        form_v.addWidget(add_btn)
-        edit_sel=QPushButton("✏ Edit selected grid")
-        edit_sel.setObjectName("btn_secondary")
-        edit_sel.clicked.connect(lambda:self._edit_row('grid'))
-        del_sel=QPushButton("🗑 Delete selected"); del_sel.setObjectName("btn_danger")
-        del_sel.clicked.connect(lambda:self._delete_rows(self.grid_tbl,self._lyr(self.grid_layer_cb),'grid'))
-        row2=QHBoxLayout(); row2.addWidget(edit_sel); row2.addWidget(del_sel)
-        form_v.addLayout(row2); form_v.addStretch()
-        split.addWidget(form_w)
-
-        # Right: grid table
-        tbl_w=QWidget(); tbl_v=QVBoxLayout(tbl_w)
-        tbl_v.addWidget(QLabel("<b>Recorded grids</b>"))
-        self.grid_tbl=self._mktbl()
-        self.grid_tbl.itemSelectionChanged.connect(self._on_grid_select)
-        tbl_v.addWidget(self.grid_tbl,1)
-        reload_btn=QPushButton("↻ Reload"); reload_btn.clicked.connect(self._reload_grids)
-        tbl_v.addWidget(reload_btn)
-        split.addWidget(tbl_w)
-        split.setSizes([260,600])
-        vl.addWidget(split,1)
-
-        # Status label
-        self.grid_status=QLabel("")
-        self.grid_status.setObjectName("statusMsg")
-        vl.addWidget(self.grid_status)
-        self._grid_draw_tool=None
-        return w
-    cls._build_grid_map_tab = _build_grid_map_tab
-
-    def _start_grid_drawing(self):
-        """Activate polygon drawing tool on the grid layer."""
-        lyr=self._lyr(self.grid_layer_cb)
-        if not lyr: QMessageBox.warning(self,"","Create or connect the excavation_grids layer first."); return
-        # Set as active layer and start editing
-        self.iface.setActiveLayer(lyr)
-        if not lyr.isEditable(): lyr.startEditing()
-        # Activate add feature tool
-        self.iface.actionAddFeature().trigger()
-        self.grid_status.setText("Drawing mode active — click on the map to draw polygon vertices. Right-click to finish.")
-        self._msg("Grid drawing active — draw on the QGIS map canvas")
-    cls._start_grid_drawing = _start_grid_drawing
-
-    def _stop_grid_drawing(self):
-        """Stop drawing and commit."""
-        lyr=self._lyr(self.grid_layer_cb)
-        if lyr and lyr.isEditable():
-            lyr.commitChanges()
-            self.iface.actionPan().trigger()
-            self._reload_grids()
-            self.grid_status.setText("Drawing stopped. Grids saved.")
-    cls._stop_grid_drawing = _stop_grid_drawing
-
-    def _add_grid_record(self):
-        """Add metadata record — call before or after drawing the polygon."""
-        lyr=self._lyr(self.grid_layer_cb)
-        if not lyr: QMessageBox.warning(self,"","Set grid layer first."); return
-        from qgis.core import QgsFeature
-        vals={
-            'grid_name':  self.grid_name_input.text().strip(),
-            'site':       self.grid_site_input.text().strip() or getattr(self,'_current_site',''),
-            'season':     self.grid_season_input.text().strip(),
-            'elevation_m':self.grid_elev_input.value(),
-            'notes':      self.grid_notes_input.text().strip(),
-        }
-        if not vals['grid_name']: QMessageBox.warning(self,"","Enter a grid name."); return
-        self._write_feat(lyr,vals)
-        self.grid_status.setText(f"Grid '{vals['grid_name']}' recorded. Draw its polygon on the map.")
-        self._reload_grids()
-        # Clear form
-        self.grid_name_input.clear(); self.grid_notes_input.clear()
-    cls._add_grid_record = _add_grid_record
-
-    def _reload_grids(self):
-        lyr=self._lyr(self.grid_layer_cb)
-        if not lyr: self.grid_tbl.setRowCount(0); return
-        fnames=[f.name() for f in lyr.fields()]
-        feats=list(lyr.getFeatures())
-        self.grid_tbl.setColumnCount(len(fnames)); self.grid_tbl.setHorizontalHeaderLabels(fnames)
-        self.grid_tbl.setRowCount(len(feats)); self.grid_tbl.setProperty("_fids",[f.id() for f in feats])
-        for ri,feat in enumerate(feats):
-            for ci,fn in enumerate(fnames):
-                v=feat.attribute(fn)
-                self.grid_tbl.setItem(ri,ci,QTableWidgetItem(str(v) if v is not None else ''))
-    cls._reload_grids = _reload_grids
-
-    def _on_grid_select(self):
-        """Select grid on map when clicked in table."""
-        rows=self.grid_tbl.selectionModel().selectedRows()
-        if not rows: return
-        ri=rows[0].row(); fids=self.grid_tbl.property("_fids") or []
-        if ri>=len(fids): return
-        lyr=self._lyr(self.grid_layer_cb)
-        if not lyr: return
-        lyr.removeSelection(); lyr.select(fids[ri])
-        self.iface.mapCanvas().panToSelected(lyr)
-        # Fill form with selected grid's data
-        feat=lyr.getFeature(fids[ri])
-        try:
-            self.grid_name_input.setText(str(feat.attribute('grid_name') or ''))
-            self.grid_site_input.setText(str(feat.attribute('site') or ''))
-            self.grid_season_input.setText(str(feat.attribute('season') or ''))
-            try: self.grid_elev_input.setValue(float(feat.attribute('elevation_m') or 0))
-            except: pass
-            self.grid_notes_input.setText(str(feat.attribute('notes') or ''))
-        except: pass
-    cls._on_grid_select = _on_grid_select
-
-    def _zoom_to_grids(self):
-        lyr=self._lyr(self.grid_layer_cb)
-        if lyr:
-            self.iface.mapCanvas().setExtent(lyr.extent().buffered(lyr.extent().width()*0.1))
-            self.iface.mapCanvas().refresh()
-    cls._zoom_to_grids = _zoom_to_grids
-
-    # Patch _edit_row to handle 'grid'
-    _orig_edit_row = cls._edit_row
-    def _edit_row_grid(self, pfx):
-        if pfx=='grid':
-            lyr=self._lyr(self.grid_layer_cb)
-            tbl=self.grid_tbl
-            if not lyr: return
-            rows=tbl.selectionModel().selectedRows()
-            if not rows: QMessageBox.information(self,"","Select a grid row first."); return
-            ri=rows[0].row(); fids=tbl.property("_fids") or []
-            if ri>=len(fids): return
-            fid=fids[ri]; feat=lyr.getFeature(fid)
-            defs={f.name():feat.attribute(f.name()) for f in lyr.fields()}
-            dlg=RecordDialog(self._schema_for(lyr),defaults=defs,title="Edit Grid",parent=self)
-            if dlg.exec_()!=QDialog.Accepted: return
-            self._write_feat(lyr,dlg.values(),fid=fid); self._reload_grids()
-        else: _orig_edit_row(self,pfx)
-    cls._edit_row = _edit_row_grid
-
-    def _export_grid_map(self):
-        """Export the grid map as a professional PNG with site info overlay."""
-        lyr=self._lyr(self.grid_layer_cb)
-        if not lyr: QMessageBox.warning(self,"","Set grid layer first."); return
-        path,_=QFileDialog.getSaveFileName(self,"Export Grid Map","grid_map.png","PNG (*.png);;PDF (*.pdf)")
-        if not path: return
-
-        # Zoom to grid extent first
-        self._zoom_to_grids()
-        self.iface.mapCanvas().refresh()
-
-        # Capture map canvas
-        from qgis.PyQt.QtCore import QSize
-        canvas=self.iface.mapCanvas()
-        canvas_px=QPixmap(canvas.size())
-        canvas.render(canvas_px)
-
-        # Compose final image with overlay
-        margin=40; W=canvas_px.width()+2*margin; H=canvas_px.height()+2*margin+80
-        final=QPixmap(W,H); final.fill(QColor('#f8f5ee'))
-        p=QPainter(final); p.setRenderHint(QPainter.Antialiasing)
-
-        # White map area
-        p.drawPixmap(margin,margin+80,canvas_px)
-        p.setPen(QPen(QColor('#2a2a2a'),1.2))
-        p.drawRect(margin-1,margin+79,canvas_px.width()+2,canvas_px.height()+2)
-
-        # Header band
-        p.setBrush(QBrush(QColor('#1a1a1a'))); p.setPen(QPen(Qt.NoPen))
-        p.drawRect(0,0,W,76)
-
-        # Title
-        site=getattr(self,'_current_site','')
-        grid_count=lyr.featureCount()
-        p.setPen(QColor('#c8a860'))
-        p.setFont(QFont('Arial',18,QFont.Bold))
-        p.drawText(margin,48,f"Excavation Grid Map  —  {site}")
-        p.setFont(QFont('Arial',10)); p.setPen(QColor('#aaa'))
-        from qgis.PyQt.QtCore import QDate
-        p.drawText(margin,68,f"{grid_count} grids  |  Generated: {QDate.currentDate().toString('d MMMM yyyy')}")
-
-        # North arrow (simple)
-        na_x=W-margin-36; na_y=margin+90
-        p.setBrush(QBrush(QColor('#333'))); p.setPen(QPen(Qt.NoPen))
-        from qgis.PyQt.QtGui import QPolygon
-        from qgis.PyQt.QtCore import QPoint
-        p.drawPolygon(QPolygon([QPoint(na_x,na_y),QPoint(na_x-8,na_y+20),QPoint(na_x,na_y+14),QPoint(na_x+8,na_y+20)]))
-        p.setFont(QFont('Arial',8,QFont.Bold)); p.setPen(QColor('#333'))
-        p.drawText(na_x-4,na_y-4,'N')
-
-        # Grid legend (grid names list)
-        leg_y=margin+canvas_px.height()+90
-        if leg_y+40 < H:
-            p.setFont(QFont('Arial',8,QFont.Bold)); p.setPen(QColor('#333'))
-            p.drawText(margin,leg_y,"Grids recorded:")
-            p.setFont(QFont('Arial',8)); lx=margin+110
-            for feat in lyr.getFeatures():
-                try:
-                    nm=str(feat.attribute('grid_name') or '')
-                    if nm:
-                        p.drawText(lx,leg_y,nm+' |'); lx+=p.fontMetrics().horizontalAdvance(nm+' | ')+2
-                        if lx>W-margin: break
-                except: pass
-
-        # Scale bar (approximate)
-        p.setPen(QPen(QColor('#333'),2))
-        p.drawLine(margin,H-16,margin+80,H-16)
-        p.setFont(QFont('Arial',7)); p.drawText(margin,H-6,"approx. scale")
-
-        p.end()
-
-        if path.endswith('.pdf'):
-            # Save as PDF via QPdfWriter
-            try:
-                from qgis.PyQt.QtGui import QPdfWriter, QPagedPaintDevice
-                from qgis.PyQt.QtCore import QMarginsF
-                dev=QPdfWriter(path); dev.setResolution(150)
-                dev.setPageSize(QPagedPaintDevice.A3)
-                pp=QPainter(dev); dev.setPageMargins(QMarginsF(0,0,0,0))
-                dev.setPageSize(QPagedPaintDevice.A3)
-                pp.drawPixmap(0,0,final.scaled(dev.width(),dev.height(),Qt.KeepAspectRatio,Qt.SmoothTransformation))
-                pp.end()
-            except Exception as e:
-                QMessageBox.warning(self,"PDF error",str(e)); return
-        else:
-            final.save(path,'PNG')
-        self._msg(f"Grid map exported: {os.path.basename(path)}")
-        QMessageBox.information(self,"Done",f"Grid map saved to:\n{path}")
-    cls._export_grid_map = _export_grid_map
-
-_build_grid_map_tab_and_patch()

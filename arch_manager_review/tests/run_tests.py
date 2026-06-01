@@ -160,6 +160,48 @@ def test_read_xlsx():
 check("dock.read_xlsx", test_read_xlsx)
 
 
+def test_no_undefined_names():
+    """Static scan: every Name loaded must be bound somewhere or a builtin.
+
+    Catches the bug class that bit this plugin twice (QImage / QPagedPaintDevice
+    used without import) and any stray closure reference from refactors.
+    """
+    import ast
+    import builtins
+    known_builtins = set(dir(builtins)) | {
+        "__file__", "__name__", "__doc__", "__class__", "__qualname__"}
+    pkg = os.path.join(PKG_PARENT, "arch_manager_v2")
+    problems = {}
+    for fn in sorted(f for f in os.listdir(pkg) if f.endswith(".py")):
+        tree = ast.parse(open(os.path.join(pkg, fn), encoding="utf-8").read())
+        bound = set()
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
+                bound.add(n.id)
+            elif isinstance(n, ast.arg):
+                bound.add(n.arg)
+            elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                bound.add(n.name)
+            elif isinstance(n, ast.Import):
+                for a in n.names:
+                    bound.add((a.asname or a.name).split(".")[0])
+            elif isinstance(n, ast.ImportFrom):
+                for a in n.names:
+                    bound.add(a.asname or a.name)
+            elif isinstance(n, (ast.Global, ast.Nonlocal)):
+                bound.update(n.names)
+            elif isinstance(n, ast.ExceptHandler) and n.name:
+                bound.add(n.name)
+        known = bound | known_builtins
+        bad = {n.id: n.lineno for n in ast.walk(tree)
+               if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+               and n.id not in known}
+        if bad:
+            problems[fn] = bad
+    assert not problems, f"undefined name references: {problems}"
+check("static: no undefined names", test_no_undefined_names)
+
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 _passed = sum(1 for _, ok, _ in _RESULTS if ok)
 _failed = [(n, tb) for n, ok, tb in _RESULTS if not ok]

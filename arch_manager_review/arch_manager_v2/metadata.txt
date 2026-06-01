@@ -1,11 +1,24 @@
 [general]
 name=Archaeological Manager
 description=Harris Matrix, context data, pottery, artifacts and skeleton sheets — all linked by context number. Reads your existing QGIS layers directly.
-version=1.0
+about=Field recording and post-excavation management for archaeology: Harris Matrix builder, context/pottery/artifact registers, an interactive skeleton bone-inventory chart, customizable recording sheets, CAD import and a PDF site-report exporter. Works directly on your existing QGIS GeoPackage layers.
+version=1.1
 qgisMinimumVersion=3.22
 author=Mohannad
 email=
 homepage=
 tracker=
 repository=
+tags=archaeology,harris matrix,excavation,context,pottery,osteology,recording sheets
+category=Plugins
+icon=logo.svg
+experimental=False
+deprecated=False
 hasProcessingProvider=no
+changelog=
+    1.1 - Code-health pass: removed duplicated logic (single source of truth),
+          replaced import-time monkey-patching with mixin classes, safer
+          exception handling with QGIS logging, user data moved outside the
+          plugin folder so it survives upgrades, fixed grid-map PDF export
+          and several file-handle leaks. Added a stub-qgis test harness.
+    1.0 - Initial release.

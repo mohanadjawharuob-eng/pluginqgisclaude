@@ -142,11 +142,10 @@ TYPE_MAP = {
 
 
 def _sheets_dir():
-    """Where user-customized sheet schemas live."""
-    base = os.path.dirname(os.path.abspath(__file__))
-    p = os.path.join(base, "user_sheets")
-    os.makedirs(p, exist_ok=True)
-    return p
+    """Where user-customized sheet schemas live (outside the plugin folder so
+    they survive plugin upgrades). Legacy in-plugin schemas migrate once."""
+    from .data_manager import user_sheets_dir
+    return user_sheets_dir()
 
 
 def load_sheet_schema(sheet_key: str) -> dict:

@@ -75,6 +75,63 @@ SCHEMAS = {
 TABLE_NAMES = list(SCHEMAS.keys())
 
 
+def user_data_dir():
+    """Persistent, writable directory for plugin user data.
+
+    Lives *outside* the plugin folder so that a plugin upgrade or reinstall
+    (which replaces the plugin directory) does not wipe the user's saved name,
+    site photos, or custom recording sheets. Falls back to ~/.arch_manager if
+    the Qt standard location is unavailable.
+    """
+    base = ""
+    try:
+        from qgis.PyQt.QtCore import QStandardPaths
+        base = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
+    except Exception:
+        base = ""
+    if not base or not isinstance(base, str):
+        base = os.path.join(os.path.expanduser("~"), ".arch_manager")
+    d = os.path.join(base, "ArchManager")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _legacy_plugin_dir():
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def user_data_path(name):
+    """Path to a user-data file in user_data_dir(), migrating a legacy copy
+    from the plugin folder once so existing installs keep their settings."""
+    new = os.path.join(user_data_dir(), name)
+    if not os.path.exists(new):
+        old = os.path.join(_legacy_plugin_dir(), name)
+        if os.path.exists(old):
+            try:
+                import shutil
+                shutil.copy2(old, new)
+            except Exception:
+                pass
+    return new
+
+
+def user_sheets_dir():
+    """Directory for user-customized recording-sheet schemas (migrated once)."""
+    d = os.path.join(user_data_dir(), "user_sheets")
+    os.makedirs(d, exist_ok=True)
+    old = os.path.join(_legacy_plugin_dir(), "user_sheets")
+    if os.path.isdir(old) and os.path.abspath(old) != os.path.abspath(d):
+        try:
+            import shutil
+            for fn in os.listdir(old):
+                dst = os.path.join(d, fn)
+                if fn.endswith(".json") and not os.path.exists(dst):
+                    shutil.copy2(os.path.join(old, fn), dst)
+        except Exception:
+            pass
+    return d
+
+
 def coerce(val, qtype):
     """Convert a value to the correct Python type for a QVariant field.
 

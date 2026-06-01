@@ -60,7 +60,7 @@ from .styles import (APP_QSS, TAB_QSS, CARD_QSS, INPUT_QSS,
 from .data_manager import (SCHEMAS, TABLE_NAMES, coerce, vlayers as dm_vlayers,
                             lyr_from_cb, schema_for, write_feature, delete_features,
                             create_project as dm_create_project, open_gpkg as dm_open_gpkg,
-                            detect_sites, find_layer, safe_int)
+                            detect_sites, find_layer, safe_int, user_data_path)
 from .recording_sheets import RecordingSheetsTab
 from .harris_view import HarrisView
 
@@ -340,7 +340,7 @@ class LoginDialog(QDialog):
         # Load saved user
         try:
             import json as _json
-            cfg = os.path.join(os.path.dirname(__file__), '.user_config.json')
+            cfg = user_data_path('.user_config.json')
             if os.path.exists(cfg):
                 with open(cfg) as _f:
                     data = _json.load(_f)
@@ -363,7 +363,7 @@ class LoginDialog(QDialog):
         if self.remember_cb.isChecked():
             try:
                 import json as _json
-                cfg = os.path.join(os.path.dirname(__file__), '.user_config.json')
+                cfg = user_data_path('.user_config.json')
                 with open(cfg, 'w') as _f:
                     _json.dump({'name': self.get_user(), 'color': self.get_color()}, _f)
             except Exception:
@@ -2660,7 +2660,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         self._display_site_photo(path)
         # Save path in a per-site config
         import json
-        cfg_path = os.path.join(os.path.dirname(__file__), '.site_photos.json')
+        cfg_path = user_data_path('.site_photos.json')
         try:
             if os.path.exists(cfg_path):
                 with open(cfg_path) as _f: cfg = json.load(_f)
@@ -2759,7 +2759,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
     def _load_site_photo(self):
         if not hasattr(self, '_site_photo_lbl'): return
         import json
-        cfg_path = os.path.join(os.path.dirname(__file__), '.site_photos.json')
+        cfg_path = user_data_path('.site_photos.json')
         try:
             if os.path.exists(cfg_path):
                 with open(cfg_path) as _f: cfg = json.load(_f)

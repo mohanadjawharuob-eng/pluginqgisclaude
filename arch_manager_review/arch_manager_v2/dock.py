@@ -645,7 +645,7 @@ class _HistoryAndTabsMixin:
         self._stats_vl.addWidget(ph); self._stats_vl.addStretch()
         self._stats_scroll.setWidget(self._stats_inner)
         vl.addWidget(self._stats_scroll, 1)
-        self.tabs.addTab(w, "Statistics")
+        return w
 
     def _refresh_stats(self):
         from qgis.PyQt.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QFrame
@@ -775,7 +775,7 @@ class _HistoryAndTabsMixin:
         self._tl_vl.addWidget(ph); self._tl_vl.addStretch()
         self._tl_scroll.setWidget(self._tl_inner)
         vl.addWidget(self._tl_scroll, 1)
-        self.tabs.addTab(w, "Timeline")
+        return w
 
     PERIOD_ORDER=[
         'Prehistoric','Early Bronze Age','Middle Bronze Age','Late Bronze Age',
@@ -918,7 +918,7 @@ class _HistoryAndTabsMixin:
         self.hist_tbl = self._mktbl()
         tbl_vl.addWidget(self.hist_tbl)
         vl.addWidget(tbl_w, 1)
-        self.tabs.addTab(w, "History")
+        return w
 
     def _load_history(self):
         lyr=self._lyr(self.hist_layer_cb)
@@ -1072,7 +1072,7 @@ class _ArchaeologistMixin:
         self.arch_art_tbl = self._mktbl(); self.arch_tabs.addTab(self.arch_art_tbl,  "⚱ Artifacts")
         self.arch_ske_tbl = self._mktbl(); self.arch_tabs.addTab(self.arch_ske_tbl,  "💀 Skeletons")
         vl.addWidget(self.arch_tabs, 1)
-        self.tabs.addTab(w, "By Archaeologist")
+        return w
 
 
     def _populate_arch_fields(self):
@@ -1593,30 +1593,19 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         self._nav_stack = QStackedWidget()
 
         nav_specs = [
-            ("🏠", "Home",              "Dashboard & site setup"),
-            ("📐", "Grid & Drawing",    "Harris Matrix · Drawings · Grids"),
-            ("📋", "Contexts",          "Stratigraphic units"),
-            ("🏺", "Pottery",           "Sherds & forms"),
-            ("⚱",  "Artifacts",         "Small finds & details"),
-            ("📋", "Recording Sheet",   "Field forms · Skeletons · Bone data"),
-            ("🔗", "Relationships",     "Stratigraphic links"),
-            ("🗺",  "Context View",      "Linked data per context"),
-            ("📊", "Statistics",        "Counts & charts"),
-            ("📅", "Timeline",          "Period sequence"),
-            ("📖", "History",           "Edit log"),
-            ("👤", "By Archaeologist",  "Filter by recorder"),
-            ("📷", "Media",             "Photos · Drawings · Documents"),
-            ("⛏",  "Pre-Excavation",   "Checklist · Equipment · Safety"),
-            ("🔄", "Workflow",          "Step-by-step workflow guide"),
-            ("📚", "Manual",            "Plugin documentation & help"),
+            ("home",      "Home",         "Dashboard & site setup"),
+            ("layers",    "Stratigraphy", "Contexts · Matrix · Map"),
+            ("finds",     "Finds",        "Pottery · Artifacts"),
+            ("clipboard", "Recording",    "Sheets · Skeletons · Bone"),
+            ("map",       "Field",        "Grids · Drawings · Photos"),
+            ("chart",     "Analysis",     "Counts · timeline"),
+            ("history",   "Provenance",   "Edit log · by recorder"),
         ]
 
         # Group labels inserted before items at these indexes
         _nav_groups = {
-            1:  "FIELD RECORDING",
-            6:  "ANALYSIS",
-            10: "TEAM",
-            12: "MEDIA & DOCS",
+            1: "RECORD",
+            5: "REVIEW",
         }
 
         nav_scroll = QScrollArea(); nav_scroll.setWidgetResizable(True)
@@ -1683,6 +1672,10 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         if hasattr(self, '_backup_project'): bak_btn.clicked.connect(self._backup_project)
         f_row.addWidget(pdf_btn); f_row.addWidget(bak_btn)
         fh.addLayout(f_row)
+        guide_btn = QPushButton("📖  Guide & Help")
+        guide_btn.setObjectName("btn_ghost"); guide_btn.setCursor(Qt.PointingHandCursor)
+        guide_btn.clicked.connect(self._show_guide)
+        fh.addWidget(guide_btn)
         sb.addWidget(foot)
 
         root.addWidget(sidebar)
@@ -1722,23 +1715,43 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             def currentIndex(_): return outer_self._nav_stack.currentIndex()
         self.tabs = _NavTabsShim()
 
-        # Now build all the tabs (each adds one page to _nav_stack)
-        self._build_home_tab()          # 0 Home
-        self._build_grid_drawing_tab()  # 1 Grid & Drawing (composite)
-        self._build_ctx_tab()           # 2 Contexts
-        self._build_linked_tab("Pottery", "pot")  # 3 Pottery
-        self._build_artifacts_tab()     # 4 Artifacts (composite)
-        self._build_recording_tab()     # 5 Recording Sheet (composite)
-        self._build_rel_tab()           # 6 Relationships
-        self._build_context_detail_tab() # 7 Context View
-        self._build_stats_tab()         # 8 Statistics
-        self._build_timeline_tab()      # 9 Timeline
-        self._build_history_tab()       # 10 History
-        self._build_archaeologist_tab() # 11 By Archaeologist
-        self._build_media_tab()         # 12 Media / Photo Gallery
-        self._build_preexcav_tab()      # 13 Pre-Excavation checklist
-        self._build_workflow_tab()      # 14 Workflow guide
-        self._build_manual_tab()        # 15 Manual / Help
+        # Compose the 7 sections — each becomes one page in _nav_stack, plus a
+        # Guide page reached from the sidebar footer. Builders return widgets.
+        self._gallery_widgets = {}
+        home       = self._build_home_tab()
+        strat      = self._section([
+            ("Contexts",        self._build_ctx_tab()),
+            ("Relationships",   self._build_rel_tab()),
+            ("Harris Matrix",   self._build_matrix_tab()),
+            ("Context View",    self._build_context_detail_tab()),
+        ])
+        finds      = self._section([
+            ("Pottery",         self._build_linked_tab("Pottery", "pot", add_to_nav=False)),
+            ("Artifacts",       self._build_linked_tab("Artifacts", "art", add_to_nav=False)),
+            ("Artifact Detail", self._build_artdet_tab()),
+        ])
+        recording  = self._build_recording_tab()
+        field      = self._section([
+            ("Grid Map",        self._build_grid_map_tab()),
+            ("Drawings",        self._build_drawings_tab()),
+            ("Media",           self._build_media_tab()),
+        ])
+        analysis   = self._section([
+            ("Statistics",      self._build_stats_tab()),
+            ("Timeline",        self._build_timeline_tab()),
+        ])
+        provenance = self._section([
+            ("Edit History",    self._build_history_tab()),
+            ("By Archaeologist", self._build_archaeologist_tab()),
+        ])
+        self._guide_page = self._section([
+            ("Workflow",        self._build_workflow_tab()),
+            ("Pre-Excavation",  self._build_preexcav_tab()),
+            ("Manual",          self._build_manual_tab()),
+        ])
+        for _w in (home, strat, finds, recording, field, analysis,
+                   provenance, self._guide_page):
+            self._nav_stack.addWidget(_w)
 
         # Activate Home tab
         if self._nav_items:
@@ -1786,6 +1799,34 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         self.style().polish(self)
         self.update()
 
+    def _section(self, pairs):
+        """Wrap (label, widget) pairs in a themed sub-tab bar; return the page.
+
+        Used to compose several former top-level tabs into one nav section.
+        """
+        page = QWidget(); page.setStyleSheet("background:transparent;")
+        vl = QVBoxLayout(page); vl.setContentsMargins(0, 0, 0, 0); vl.setSpacing(0)
+        sub = QTabWidget(); sub.setObjectName("subTabs")
+        for label, w in pairs:
+            if w is not None:
+                sub.addTab(w, label)
+        vl.addWidget(sub)
+        return page
+
+    def _show_guide(self):
+        """Switch to the Guide page (Workflow / Pre-excavation / Manual)."""
+        if not hasattr(self, "_guide_page"):
+            return
+        idx = self._nav_stack.indexOf(self._guide_page)
+        if idx < 0:
+            return
+        self._nav_stack.setCurrentIndex(idx)
+        for item in self._nav_items:
+            item.setChecked(False)
+        if hasattr(self, "_topbar"):
+            self._topbar.set_title("Guide & Help",
+                                   "Workflow · Pre-excavation · Manual")
+
     def _build_grid_drawing_tab(self):
         """Composite tab: Harris Matrix + Drawings + Grid Map as sub-tabs."""
         page = QWidget()
@@ -1831,7 +1872,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         bone_w = self._build_bone_form_tab()
         sub.addTab(bone_w, "🦴 Bone Form")
         vl.addWidget(sub)
-        self.tabs.addTab(page, "Recording Sheet")
+        return page
 
     def _build_home_tab(self):
         """Dashboard home tab — stat cards + recent activity + data overview."""
@@ -2005,7 +2046,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
 
         scroll_area.setWidget(scroll_content)
         page_layout.addWidget(scroll_area, 1)
-        self.tabs.addTab(page, "Home")
+        return page
 
     def _build_media_tab(self):
         """Photo/Media gallery with categories."""
@@ -2026,7 +2067,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         sub.addTab(self._build_photo_gallery_subtab("drawings"), "✏ Field Drawings")
         sub.addTab(self._build_photo_gallery_subtab("refs"),     "📄 Documents")
         outer.addWidget(sub, 1)
-        self.tabs.addTab(page, "Media")
+        return page
 
     def _build_photo_gallery_subtab(self, category):
         """Build a photo/file gallery widget for the given category."""
@@ -2389,7 +2430,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         scroll.setWidget(list_w)
         outer.addWidget(scroll, 1)
 
-        self.tabs.addTab(page, "Pre-Excavation")
+        return page
 
     def _build_workflow_tab(self):
         """Visual step-by-step excavation workflow guide."""
@@ -2500,7 +2541,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         scroll.setWidget(inner)
         page_vl = QVBoxLayout(page); page_vl.setContentsMargins(0,0,0,0)
         page_vl.addWidget(scroll)
-        self.tabs.addTab(page, "Workflow")
+        return page
 
     def _build_manual_tab(self):
         """In-plugin documentation and help."""
@@ -2635,9 +2676,21 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         scroll.setWidget(inner)
         page_vl = QVBoxLayout(page); page_vl.setContentsMargins(0,0,0,0)
         page_vl.addWidget(scroll)
-        self.tabs.addTab(page, "Manual")
+        return page
 
     def _switch_nav_to(self, label_text):
+        # Map old per-view names onto the new consolidated sections so existing
+        # quick-action / workflow buttons keep working after the nav redesign.
+        _alias = {
+            "Contexts": "Stratigraphy", "Relationships": "Stratigraphy",
+            "Context View": "Stratigraphy", "Harris Matrix": "Stratigraphy",
+            "Grid & Drawing": "Field", "Pottery": "Finds", "Artifacts": "Finds",
+            "Recording Sheet": "Recording", "Skeletons": "Recording",
+            "Statistics": "Analysis", "Timeline": "Analysis",
+            "History": "Provenance", "By Archaeologist": "Provenance",
+            "Media": "Field",
+        }
+        label_text = _alias.get(label_text, label_text)
         for i, item in enumerate(self._nav_items):
             if item._label == label_text:
                 self._switch_nav(i); return
@@ -3007,7 +3060,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         side.setMinimumWidth(280); side.setMaximumWidth(340)
         split.addWidget(side, 1)
         outer.addLayout(split, 1)
-        self.tabs.addTab(page, "Contexts")
+        return page
 
     def _filter_ctx_table(self, text):
         """Filter visible rows in the contexts table."""
@@ -3429,7 +3482,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         self.ctxdet_tabs.addTab(self.ctxdet_rel_tbl, "🔗 Strat. Relations")
 
         vl.addWidget(self.ctxdet_tabs, 1)
-        self.tabs.addTab(w, "Context View")
+        return w
 
     def _load_context_detail(self):
         from .dock import REL_LABELS
@@ -3619,7 +3672,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         bv.addWidget(self.rel_tbl, 1)
 
         vl.addWidget(body, 1)
-        self.tabs.addTab(w, "Relationships")
+        return w
 
     def _build_import_tab(self):
         w = QWidget(); w.setStyleSheet("background:transparent;")

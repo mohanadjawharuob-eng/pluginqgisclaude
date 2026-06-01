@@ -18,6 +18,7 @@ from .styles import (CLR, LIGHT_CLR, btn_style, FONT_SANS,
                      BTN_PRIMARY, BTN_SECONDARY, BTN_GHOST, NAV_ITEM_QSS,
                      RADIUS, RADIUS_SM, FONT_SIZE_XS, FONT_SIZE_SM,
                      FONT_SIZE_LG, FONT_SIZE_XL, FONT_SIZE_MD)
+from .icons import pixmap as icon_pixmap, has as icon_has
 
 
 # ── Card  —  reusable content block ──────────────────────────────────────────
@@ -195,12 +196,22 @@ class NavItem(QPushButton):
     def _build(self):
         self.setText("")
         h = QHBoxLayout(self); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(0)
-        ic = QLabel(self._icon)
+        ic = QLabel()
         ic.setFixedSize(42, 46)
         ic.setAlignment(Qt.AlignCenter)
-        ic.setStyleSheet("font-size:16px;background:transparent;")
+        ic.setStyleSheet("background:transparent;")
         self._icon_lbl = ic
+        self._paint_icon(self._c.get('sidebar_text_dim', self._c['text_dim']))
         h.addWidget(ic)
+
+    def _paint_icon(self, color):
+        """Render the icon as a recoloured SVG, or fall back to text/emoji."""
+        if icon_has(self._icon):
+            self._icon_lbl.setPixmap(icon_pixmap(self._icon, color, 20))
+        else:
+            self._icon_lbl.setText(self._icon)
+            self._icon_lbl.setStyleSheet(
+                f"font-size:16px;color:{color};background:transparent;")
         col = QVBoxLayout(); col.setContentsMargins(0, 0, 0, 0); col.setSpacing(0)
         self._lbl_text = QLabel(self._label)
         self._lbl_text.setStyleSheet(
@@ -225,9 +236,7 @@ class NavItem(QPushButton):
         self._lbl_text.setStyleSheet(
             f"color:{col};font-size:{FONT_SIZE_SM};"
             f"font-weight:{'600' if b else '500'};background:transparent;")
-        self._icon_lbl.setStyleSheet(
-            f"font-size:16px;"
-            f"color:{active_col if b else inactive_col};background:transparent;")
+        self._paint_icon(active_col if b else inactive_col)
         if self._sub_lbl:
             dim = c.get('sidebar_text_dim', c['text_dim'])
             self._sub_lbl.setStyleSheet(f"font-size:9px;color:{dim};background:transparent;")

@@ -1,73 +1,74 @@
-# Archaeological Manager — Code Review & Changes
+# Archaeological Manager — Review & Improvement Log
 
-Reviewed: v1.0 (metadata) / internal v5–v6. QGIS ≥ 3.22.
+Reviewed and refactored from v1.0. QGIS ≥ 3.22. All work verified with a
+stub-`qgis` test harness (`tests/run_tests.py`, **14/14 pass**) since a full
+QGIS isn't available offline. **Runtime/visual behaviour should still be
+confirmed in QGIS** — especially the tabs touched in Phases 2 and 4.
 
-## Overall verdict
-A genuinely impressive, feature-rich plugin: Harris Matrix, context/pottery/
-artifact registers, an interactive skeleton bone-inventory chart, customizable
-recording sheets, CAD import, a polished PDF report exporter, dual light/dark
-themes, and edit history. The *product* is strong. The *code* works but carries
-real structural debt that will make it hard to maintain and extend safely.
+## Verdict
+A genuinely impressive, feature-rich plugin (Harris Matrix, context/pottery/
+artifact registers, interactive skeleton bone-inventory, customizable recording
+sheets, CAD import, PDF report exporter, dual themes, edit history). The product
+is strong; this pass paid down the structural debt that made it risky to change.
 
-## Fixes applied in this copy (safe, behavior-preserving)
-1. **Grid-map PDF export was broken** (`dock.py::_export_grid_map`).
-   `QPagedPaintDevice` and `QMarginsF` were used but never imported, so the PDF
-   branch always failed with a confusing "PDF error" dialog. Added the imports.
-2. **`harris_view.py::export_png` used `QImage` without importing it** → guaranteed
-   `NameError` whenever called. Added the import. (Note: this module is currently
-   dead code — see below — but the bug is now fixed should it be wired up.)
-3. **Six file-handle leaks** — `json.load(open(...))` / `json.dump(..., open(...))`
-   never closed the file. Converted to `with open(...)` blocks in `LoginDialog`,
-   the pre-excavation checklist save/load, and the site-photo config.
+## What changed (in order)
 
-All files still `py_compile` cleanly after the changes.
+**Pre-work — crash/leak fixes**
+- Grid-map PDF export used `QPagedPaintDevice`/`QMarginsF` without importing them
+  → added imports (PDF export was silently failing).
+- `harris_view.py::export_png` used `QImage` unimported → fixed.
+- 6 `json.load(open(...))`/`dump(open(...))` file-handle leaks → `with` blocks.
 
-## High-priority issues to address next (NOT changed here — need a running QGIS to verify)
+**Phase 0 — test safety net** (`tests/`)
+- `_qgis_stub.py`: a minimal fake `qgis`/`PyQt` so modules import with no QGIS.
+- `run_tests.py`: import-smoke for all 9 modules, unit tests (coerce,
+  compute_layout, detect_sites/find_layer, read_xlsx), and a static
+  undefined-name scan that catches the exact bug class above.
 
-### 1. Massive duplication between `dock.py` and the "split" modules
-`dock.py`'s header claims logic was split into `data_manager.py`, `harris_view.py`,
-etc. In reality `dock.py` **re-imports and then re-defines** the same symbols, and
-the copies have already drifted:
-- `coerce()` — data_manager maps `"NULL"`/`"None"` → `None`; dock.py's local copy
-  does not, so text fields can be saved with the literal string `"NULL"`.
-- `SCHEMAS['bone_inventory']` — data_manager has a `notes` column; dock.py's copy
-  dropped it. The table you get depends on which code path created it.
-- `HarrisView` / `compute_layout` / `ContextNode` exist in both files with
-  **different box dimensions** (80×28 vs 112×44).
-- `harris_view.py` is never imported anywhere → **the whole module is dead code.**
+**Phase 1 — single source of truth**
+- Removed dock.py's duplicated `coerce`, `SCHEMAS`, `HarrisView`, `ContextNode`,
+  `compute_layout` and box constants — the copies had drifted into real bugs:
+  - dock's `coerce` stored literal `"NULL"` in text fields → now uses the correct
+    `data_manager.coerce` (merged in its `LongLong` handling).
+  - dock's `SCHEMAS` was missing `bone_inventory.notes` → restored.
+  - `harris_view.py` is now the canonical (and no longer dead) module.
 
-➡ Pick one source of truth: delete the duplicates from `dock.py`, import from the
-modules, and remove (or actually use) `harris_view.py`.
+**Phase 2 — no more monkey-patching**
+- The three `_patch_*()` functions grafted 39 methods onto `ArchWindow` at import
+  time. Replaced with real mixin classes:
+  `ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMainWindow)`.
+  Method-wrap chains preserved via a base/override split (e.g. `_edit_row` →
+  `_edit_row_ext_impl` → `_edit_row_base`).
 
-### 2. Monkey-patching the main class (39 methods)
-`_patch_archwindow()`, `_build_archaeologist_tab_and_patch()`, and
-`_build_grid_map_tab_and_patch()` graft ~39 methods onto `ArchWindow` *after* the
-class is defined, including re-wrapping `_write_feat` and `_delete_rows` at import
-time. This is the single biggest readability/maintenance hazard. Fold these methods
-into the class body (or real mixin base classes).
+**Phase 3 — robustness**
+- 49 bare `except:` → `except Exception:` (bare also swallows Ctrl-C / SystemExit).
+- Added `data_manager.qlog()` (QgsMessageLog) and wired it into the silent
+  data paths (write/delete rollbacks, history-write failures).
 
-### 3. Silent exception swallowing (~110 occurrences)
-`except: pass` / `except Exception: pass` are everywhere. Bugs disappear instead of
-surfacing. Narrow the exception types and at minimum log via `QgsMessageLog`.
+**Phase 4 — theme completeness**
+- Embedded recording-sheet widgets were hardcoded dark (form labels were
+  `#222` on a dark card — nearly invisible). Converted to objectName-based
+  styling so the themed QSS cascades and the light/dark toggle works.
 
-### 4. Theme toggle doesn't reach two tabs
-`bone_view.py` (SkeletonView) and `recording_sheets.py` use hardcoded hex colors
-(`#1e1e1e`, `#f5f2eb`, `#888`, …) instead of the object-name + QSS approach used by
-`widgets.py`. Toggle to Light mode and those panels stay dark. Route them through
-`build_*_qss` like the rest.
+**Phase 5 — persistence & metadata**
+- User data (name/colour, site photos, custom sheet schemas) moved out of the
+  plugin folder to `QStandardPaths.AppDataLocation` (legacy copies migrated
+  once) so a plugin upgrade no longer wipes them.
+- `metadata.txt`: version 1.1, `about`/`tags`/`icon`/`changelog` added.
 
-### 5. User data is written inside the plugin folder
-`.user_config.json`, `.site_photos.json`, and `user_sheets/` live in
-`os.path.dirname(__file__)`. A plugin upgrade/reinstall wipes that folder and the
-user's settings with it. Use `QgsSettings` or `QStandardPaths.AppDataLocation`.
+dock.py: **4828 → 4588 lines**; 0 monkey-patch functions, 0 duplicated
+symbols, 0 bare excepts.
 
-## Lower-priority polish
-- `metadata.txt` is missing `tracker`, `repository`, and `homepage` (required for
-  publishing to the official QGIS plugin repo) and `email` is blank.
-- `bare except:` on the relationships JSON parse in `ArchWindow.__init__`.
-- `widgets.py` keeps a `SearchBar` explicitly marked "legacy — prefer SearchInput";
-  pick one.
-- Editing uses `startEditing()/commitChanges()` per write with no transaction
-  grouping; bulk imports will be slow and aren't atomic.
-- Consider a small test harness (mock `qgis.core`) so syntax/regression checks can
-  run in CI without a full QGIS.
+## Known remaining items (deliberately not changed)
+- `bone_view.py` skeleton chart keeps its paper background (B&W bone PNGs need a
+  light canvas) — flag if you'd prefer it themed.
+- `FormBuilderDialog` (modal) keeps its own dark styling; not in the main-window
+  cascade, so it won't follow the toggle. Easy follow-up if wanted.
+- `metadata.txt` `email`/`homepage`/`tracker`/`repository` left blank for you.
+- Broader logging (the ~120 `except Exception: pass`) left as-is to avoid noise;
+  convert selectively as needed.
+
+## Running the tests
+```
+python3 tests/run_tests.py     # no QGIS/PyQt/pytest needed
+```

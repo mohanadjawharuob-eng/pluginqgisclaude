@@ -447,7 +447,7 @@ class _HistoryAndTabsMixin:
                 if flt!="All":
                     v=feat.attribute('context_num')
                     if str(v)!=flt: continue
-            except: pass
+            except Exception: pass
             feats.append(feat)
         self.draw_tbl.setRowCount(len(feats)); self.draw_tbl.setProperty("_fids",[f.id() for f in feats])
         for ri,feat in enumerate(feats):
@@ -493,7 +493,7 @@ class _HistoryAndTabsMixin:
         if ri>=len(fids): return
         feat=lyr.getFeature(fids[ri])
         try: path=str(feat.attribute('file_path') or '')
-        except: path=''
+        except Exception: path=''
         if path and os.path.exists(path):
             import subprocess
             subprocess.Popen(['explorer' if os.name=='nt' else 'xdg-open', path])
@@ -534,7 +534,7 @@ class _HistoryAndTabsMixin:
             self._write_feat(lyr, vals)
             self._reload_drawings()
             try: self._log_history('import_cad', os.path.basename(path), 0, f"context {ctx_num or 'N/A'}")
-            except: pass
+            except Exception: pass
             if path.lower().endswith('.dxf'):
                 from qgis.core import QgsVectorLayer, QgsProject
                 vlyr = QgsVectorLayer(path, os.path.splitext(os.path.basename(path))[0], 'ogr')
@@ -821,7 +821,7 @@ class _HistoryAndTabsMixin:
 
         def sort_key(p):
             try: return PERIOD_ORDER.index(p)
-            except: return len(PERIOD_ORDER) + (ord(p[0]) if p else 999)
+            except Exception: return len(PERIOD_ORDER) + (ord(p[0]) if p else 999)
 
         sorted_periods = sorted(period_counts.keys(), key=sort_key)
         total = sum(period_counts.values())
@@ -987,7 +987,7 @@ class _HistoryAndTabsMixin:
         num_str=self.ctxdet_cb.currentText().strip() if hasattr(self,'ctxdet_cb') else ''
         if not num_str: QMessageBox.warning(self,"","Open Context View tab and select a context first."); return
         try: num=int(num_str)
-        except: QMessageBox.warning(self,"","Context number must be integer."); return
+        except Exception: QMessageBox.warning(self,"","Context number must be integer."); return
         path,_=QFileDialog.getSaveFileName(self,f"Export Context {num} PDF",
             f"context_{num}.pdf","PDF (*.pdf)")
         if not path: return
@@ -1356,9 +1356,9 @@ class _GridMapMixin:
             self.grid_site_input.setText(str(feat.attribute('site') or ''))
             self.grid_season_input.setText(str(feat.attribute('season') or ''))
             try: self.grid_elev_input.setValue(float(feat.attribute('elevation_m') or 0))
-            except: pass
+            except Exception: pass
             self.grid_notes_input.setText(str(feat.attribute('notes') or ''))
-        except: pass
+        except Exception: pass
 
     def _zoom_to_grids(self):
         lyr=self._lyr(self.grid_layer_cb)
@@ -1445,7 +1445,7 @@ class _GridMapMixin:
                     if nm:
                         p.drawText(lx,leg_y,nm+' |'); lx+=p.fontMetrics().horizontalAdvance(nm+' | ')+2
                         if lx>W-margin: break
-                except: pass
+                except Exception: pass
 
         # Scale bar (approximate)
         p.setPen(QPen(QColor('#333'),2))
@@ -1493,7 +1493,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         self._current_site=''   # set on connect
         raw,_=QgsProject.instance().readEntry("ArchManager","rels","[]")
         try: self.relationships=json.loads(raw)
-        except: pass
+        except Exception: pass
         # Status bar FIRST so _msg() works during UI build
         self.sb=QStatusBar(); self.setStatusBar(self.sb)
         self.sb.setObjectName("statusBar")
@@ -1518,7 +1518,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         self.setStyleSheet(ROOT_QSS)
         if hasattr(self, 'statusBar'):
             try: self.statusBar().setObjectName("statusBar")
-            except: pass
+            except Exception: pass
 
         # Root container
         central = QWidget(); central.setObjectName("root")
@@ -2110,9 +2110,9 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             status_lbl.setText(f"{len(files)} file(s) attached")
             _sync_registry()
             try: self._save_gallery_registry()
-            except: pass
+            except Exception: pass
             try: self._log_history('media_add', category, os.path.basename(paths[-1]), f"{len(paths)} file(s)")
-            except: pass
+            except Exception: pass
 
         def open_file():
             items = gallery.selectedItems()
@@ -2139,9 +2139,9 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             status_lbl.setText(f"{len(files)} file(s) attached")
             _sync_registry()
             try: self._save_gallery_registry()
-            except: pass
+            except Exception: pass
             try: self._log_history('media_remove', category, os.path.basename(removed), '')
-            except: pass
+            except Exception: pass
 
         def context_menu(pos):
             items = gallery.selectedItems()
@@ -2165,7 +2165,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                     item.setText(f"{base_name}\n📍 {tag}")
                     _sync_registry()
                     try: self._save_gallery_registry()
-                    except: pass
+                    except Exception: pass
             tag_action.triggered.connect(do_tag)
             menu.addAction(tag_action)
 
@@ -2177,7 +2177,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                 item.setToolTip(name)
                 _sync_registry()
                 try: self._save_gallery_registry()
-                except: pass
+                except Exception: pass
             untag_action.triggered.connect(do_untag)
             menu.addAction(untag_action)
 
@@ -3309,7 +3309,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                         self._artdet_image_path=str(ip)
                         self._show_artdet_image(str(ip))
                     break
-            except: pass
+            except Exception: pass
 
     def _pick_artdet_image(self):
         p,_=QFileDialog.getOpenFileName(self,"Select image","","Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp)")
@@ -3341,7 +3341,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                 try:
                     if str(feat.attribute(id_fn))==str(self._artdet_current_id):
                         ctx_num=feat.attribute(ctx_fn) if ctx_fn else None; break
-                except: pass
+                except Exception: pass
         # Delete existing
         det_lyr.startEditing()
         to_del=[f.id() for f in det_lyr.getFeatures()
@@ -3436,7 +3436,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         num_str=self.ctxdet_cb.currentText().strip()
         if not num_str: QMessageBox.warning(self,"","Enter a context number."); return
         try: num=int(num_str)
-        except: QMessageBox.warning(self,"","Context number must be an integer."); return
+        except Exception: QMessageBox.warning(self,"","Context number must be an integer."); return
 
         ctx=self.ctx_data.get(num,{})
         info_parts=[f"<b>Context {num}</b>"]
@@ -3479,7 +3479,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             for feat in lyr2.getFeatures():
                 try:
                     if self._safe_int(feat,nf)!=num: continue
-                except: continue
+                except Exception: continue
                 for pf in per_fields:
                     v=str(feat.attribute(pf) or '').strip()
                     if v and v.lower() not in ('null','none',''):
@@ -3492,7 +3492,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             for feat in ctx_lyr.getFeatures():
                 try:
                     if self._safe_int(feat,nf_ctx)!=num: continue
-                except: continue
+                except Exception: continue
                 v=str(feat.attribute(pf) or '').strip()
                 if v and v.lower() not in ('null','none',''):
                     key=(v,'context')
@@ -3578,7 +3578,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                 seg=str(feat.attribute('segment') or ''); status=str(feat.attribute('status') or '')
                 bid=rev.get((bone,side,seg))
                 if bid and status: data[bid]=rmap.get(status,'none')
-            except: pass
+            except Exception: pass
         self._skel_view.load_data(data)
 
     def _build_rel_tab(self):
@@ -3708,7 +3708,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             self._fill_fcb(lcb,fcb)
         self._msg(f"Project created: {path}")
         try: self._log_history('create_project', os.path.basename(path), 0, site)
-        except: pass
+        except Exception: pass
         QMessageBox.information(self,"Done",
             "All tables created.\n\n"
             "• contexts = Polygon layer — draw your excavation squares on the QGIS map\n"
@@ -3970,7 +3970,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
     def _safe(self,feat,fname):
         if fname and fname!="— none —":
             try: return str(feat.attribute(fname) or '')
-            except: pass
+            except Exception: pass
         return ''
 
 
@@ -3991,7 +3991,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                                for r in self.relationships)
                     if not exists:
                         self.relationships.append(rel); loaded+=1
-            except: pass
+            except Exception: pass
         if loaded: self._msg(f"Loaded {loaded} relationships from GeoPackage")
 
     def _load_ctx(self):
@@ -4000,7 +4000,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         tf=self.ctx_type_field.currentText(); pf=self.ctx_per_field.currentText(); df=self.ctx_desc_field.currentText()
         for feat in lyr.getFeatures():
             try: num=int(feat.attribute(nf))
-            except: continue
+            except Exception: continue
             self.ctx_data[num]={'num':num,'fid':feat.id(),'type':self._safe(feat,tf),
                                 'period':self._safe(feat,pf),'description':self._safe(feat,df)}
         nums=sorted(self.ctx_data)
@@ -4039,7 +4039,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                 try:
                     num=feat.attribute('skeleton_num')
                     self.bone_form_ske_cb.addItem(str(num),num)
-                except: pass
+                except Exception: pass
         self.bone_form_ske_cb.blockSignals(False)
 
     def _reload_linked(self,pfx,*a):
@@ -4052,7 +4052,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         for feat in lyr.getFeatures():
             try:
                 if flt!="All" and str(int(feat.attribute(nf)))!=flt: continue
-            except: continue
+            except Exception: continue
             feats.append(feat)
         tbl.setRowCount(len(feats)); tbl.setProperty("_fids",[f.id() for f in feats])
         for ri,feat in enumerate(feats):
@@ -4071,12 +4071,12 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             for p in re.split(r'[,;/\s]+',str(val).strip()):
                 p=p.strip()
                 try: nums.append(int(float(p)))
-                except: pass
+                except Exception: pass
             return nums
         seen=set()
         for feat in lyr.getFeatures():
             try: src=int(feat.attribute(nf))
-            except: continue
+            except Exception: continue
             pairs=[]
             if af!="— none —":
                 for t in parse_refs(feat.attribute(af)): pairs.append((src,t,'above'))
@@ -4182,20 +4182,20 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                     num=feat.attribute('skeleton_num')
                     idx=self.bone_form_ske_cb.findData(num)
                     if idx>=0: self.bone_form_ske_cb.setCurrentIndex(idx)
-                except: pass
+                except Exception: pass
         self._switch_nav(5)  # Recording Sheet composite tab
         if hasattr(self, '_recording_subtabs'):
             self._recording_subtabs.setCurrentIndex(2)  # Bone Form sub-tab
         try:
             n=int(self.bone_form_ske_cb.currentText()); self._after_load_bone_view(n)
-        except: pass
+        except Exception: pass
 
     def _load_bone_form(self):
         """Load existing bone data from bone_inventory layer for selected skeleton"""
         ske_num_text=self.bone_form_ske_cb.currentText()
         if not ske_num_text: return
         try: ske_num=int(ske_num_text)
-        except: return
+        except Exception: return
         # Load header from skeletons layer
         ske_lyr=self._lyr(self.ske_layer_cb)
         if ske_lyr:
@@ -4215,7 +4215,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                         idx=self.bone_form_type.findText(ft)
                         if idx>=0: self.bone_form_type.setCurrentIndex(idx)
                         break
-                except: pass
+                except Exception: pass
         # Reset all dropdowns
         for cb in self._bone_widgets.values(): cb.setCurrentIndex(0)
         # Load bone_inventory
@@ -4232,10 +4232,10 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                 if key in self._bone_widgets:
                     idx=self._bone_widgets[key].findText(status)
                     if idx>=0: self._bone_widgets[key].setCurrentIndex(idx)
-            except: pass
+            except Exception: pass
         if hasattr(self,'_after_load_bone_view'):
             try: n=int(self.bone_form_ske_cb.currentText()); self._after_load_bone_view(n)
-            except: pass
+            except Exception: pass
 
     def _save_bone_form(self):
         """Save bone inventory — one record per bone status, with safe error handling."""
@@ -4348,7 +4348,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                     extras = {k: v for k, v in binfo.items() if k != 'status' and v}
                     if extras:
                         try: feat.setAttribute('notes', json.dumps(extras)[:500])
-                        except: pass
+                        except Exception: pass
                 if bone_lyr.addFeature(feat):
                     saved_count += 1
 
@@ -4364,13 +4364,13 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                     f"Could not save bone records.\n\nDetails: {err_text}")
         except Exception as e:
             try: bone_lyr.rollBack()
-            except: pass
+            except Exception: pass
             self._msg(f"Save error: {e}", error=True)
             QMessageBox.critical(self, "Save error", f"Exception while saving:\n{e}")
 
     def _safe_int(self,feat,fname):
         try: return int(feat.attribute(fname))
-        except: return None
+        except Exception: return None
 
     def _clear_bone_form(self):
         if hasattr(self,'_skel_view'): self._skel_view.clear_all()
@@ -4408,7 +4408,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         feat=QgsFeature(lyr.fields())
         def sa(fn,v):
             try: feat.setAttribute(fn,v)
-            except: pass
+            except Exception: pass
         sa('from_ctx',coerce(from_ctx,QVariant.Int))
         sa('to_ctx',coerce(to_ctx,QVariant.Int))
         sa('rel_type',rel_type)
@@ -4452,7 +4452,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                 try:
                     if int(feat.attribute(nf))==num:
                         lyr.select(feat.id()); self.iface.mapCanvas().panToSelected(lyr); break
-                except: continue
+                except Exception: continue
             self._block=False
         for p in ['pot','art']:
             cb=getattr(self,f"{p}_fcb")
@@ -4470,7 +4470,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         if not lyr or nf=="— none —": return
         feat=lyr.getFeature(fids[ri])
         try: num=int(feat.attribute(nf))
-        except: return
+        except Exception: return
         self._block=True; self.hv.highlight(num)
         lyr.removeSelection(); lyr.select(fids[ri])
         self.iface.mapCanvas().panToSelected(lyr); self._block=False
@@ -4482,7 +4482,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         try:
             feat=lyr.getFeature(list(sel)[0]); num=int(feat.attribute(nf))
             self._block=True; self.hv.highlight(num); self._block=False
-        except: pass
+        except Exception: pass
 
     def _zoom_ctx(self):
         lyr=self._lyr(self.ctx_layer_cb)
@@ -4524,7 +4524,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         try:
             total=sum(len(v[1]) for v in sheets.values())
             self._log_history('import_excel', os.path.basename(p), 0, f"{total} rows, {len(sheets)} sheet(s)")
-        except: pass
+        except Exception: pass
 
     def _imp_csv(self):
         p,_=QFileDialog.getOpenFileName(self,"Open CSV","","CSV (*.csv *.txt)")
@@ -4535,7 +4535,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             mc=max(len(r) for r in rows); rows=[r+['']*(mc-len(r)) for r in rows]
             self._run_import({"Data":(rows[0],rows[1:])})
             try: self._log_history('import_csv', os.path.basename(p), 0, f"{len(rows)-1} rows")
-            except: pass
+            except Exception: pass
         except Exception as e: QMessageBox.critical(self,"Error",str(e))
 
     def _export_pdf(self):
@@ -4554,7 +4554,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             if ok:
                 self._msg(f"PDF exported: {os.path.basename(path)}")
                 try: self._log_history('export_pdf', os.path.basename(path), 0, opts.get('site',''))
-                except: pass
+                except Exception: pass
             else:  self._msg("PDF export failed — check permissions")
         except Exception as e:
             from qgis.PyQt.QtWidgets import QMessageBox

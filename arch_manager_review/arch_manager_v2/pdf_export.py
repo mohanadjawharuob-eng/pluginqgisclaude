@@ -920,7 +920,7 @@ def export_pdf(output_path, opts, win):
         pmap={"A4":QPagedPaintDevice.A4,"Letter":QPagedPaintDevice.Letter,"A3":QPagedPaintDevice.A3}
         device.setPageSize(pmap.get(opts.get("paper","A4"), QPagedPaintDevice.A4))
         try: device.setPageMargins(QMarginsF(0,0,0,0))
-        except: pass
+        except Exception: pass
     elif HAS_PRINTER:
         device=QPrinter(QPrinter.HighResolution); device.setOutputFormat(QPrinter.PdfFormat)
         device.setOutputFileName(output_path)
@@ -1160,7 +1160,7 @@ def _draw_artifact_catalogue(pg, win):
                 aid=_clean_val(feat.attribute(id_fn))
                 art_info[aid]={'type':_clean_val(feat.attribute(type_fn)) if type_fn else '',
                                'context':_clean_val(feat.attribute(ctx_fn)) if ctx_fn else ''}
-            except: pass
+            except Exception: pass
 
     field_pairs=[('detailed_description','Description'),('condition','Condition'),
                  ('material_detail','Material'),('dimensions','Dimensions'),
@@ -1297,7 +1297,7 @@ def _export_context_page(output_path, ctx_num, win):
         device=_QPdfWriter(output_path); device.setResolution(72)
         device.setPageSize(QPagedPaintDevice.A4)
         try: device.setPageMargins(QMarginsF(0,0,0,0))
-        except: pass
+        except Exception: pass
     elif HAS_PRINTER:
         device=QPrinter(QPrinter.HighResolution); device.setOutputFormat(QPrinter.PdfFormat)
         device.setOutputFileName(output_path); device.setPaperSize(QPrinter.A4)

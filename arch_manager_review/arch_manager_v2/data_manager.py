@@ -125,6 +125,21 @@ def schema_for(lyr):
     return [(f.name(), f.type()) for f in lyr.fields()]
 
 
+def qlog(msg, level='info'):
+    """Write a message to the QGIS log panel under 'ArchManager' (best-effort).
+
+    Used so that data-layer failures (rejected edits, history-write errors)
+    are diagnosable instead of vanishing silently.
+    """
+    try:
+        from qgis.core import QgsMessageLog, Qgis
+        lvl = {'info': Qgis.Info, 'warn': Qgis.Warning,
+               'critical': Qgis.Critical}.get(level, Qgis.Info)
+        QgsMessageLog.logMessage(str(msg), 'ArchManager', lvl)
+    except Exception:
+        pass
+
+
 def write_feature(lyr, vals: dict, fid=None, user="?", history_lyr=None):
     """
     Insert (fid=None) or update (fid=int) a feature.
@@ -152,6 +167,7 @@ def write_feature(lyr, vals: dict, fid=None, user="?", history_lyr=None):
                  lyr.name(), fid or 'new', user, str(vals)[:200])
     else:
         lyr.rollBack()
+        qlog(f"write_feature rejected on '{lyr.name()}' (fid={fid})", 'warn')
     return ok
 
 
@@ -166,6 +182,7 @@ def delete_features(lyr, fids: list, user="?", history_lyr=None):
             _log(history_lyr, 'delete', lyr.name(), str(fids), user, '')
     else:
         lyr.rollBack()
+        qlog(f"delete_features rejected on '{lyr.name()}' (fids={fids})", 'warn')
     return ok
 
 
@@ -183,8 +200,8 @@ def _log(hist_lyr, action, table_name, record_id, user, details):
         hist_lyr.startEditing()
         hist_lyr.addFeature(feat)
         hist_lyr.commitChanges()
-    except Exception:
-        pass
+    except Exception as e:
+        qlog(f"edit-history write failed: {e}", 'warn')
 
 
 def create_table(gpkg_path: str, table_name: str,

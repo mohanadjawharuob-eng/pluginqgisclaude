@@ -73,12 +73,17 @@ class StatCard(QFrame):
         outer = QHBoxLayout(self)
         outer.setContentsMargins(18, 16, 18, 16); outer.setSpacing(14)
         if icon:
-            ic = QLabel(icon)
+            ic = QLabel()
             ic.setFixedSize(44, 44)
             ic.setAlignment(Qt.AlignCenter)
-            ic.setStyleSheet(
-                f"background:{accent}28;color:{accent};"
-                f"border-radius:{RADIUS_SM};font-size:20px;")
+            if icon_has(icon):
+                ic.setPixmap(icon_pixmap(icon, accent, 22))
+                ic.setStyleSheet(f"background:{accent}28;border-radius:{RADIUS_SM};")
+            else:
+                ic.setText(icon)
+                ic.setStyleSheet(
+                    f"background:{accent}28;color:{accent};"
+                    f"border-radius:{RADIUS_SM};font-size:20px;")
             outer.addWidget(ic)
         col = QVBoxLayout(); col.setSpacing(4)
         lbl = QLabel(label.upper()); lbl.setObjectName("statLabel")

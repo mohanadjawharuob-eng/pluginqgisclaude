@@ -1803,6 +1803,9 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         self.style().unpolish(self)
         self.style().polish(self)
         self.update()
+        # Rebuild theme-coloured dynamic Home content (next steps / activity)
+        try: self._refresh_home_stats()
+        except Exception: pass
 
     def _section(self, pairs):
         """Wrap (label, widget) pairs in a themed sub-tab bar; return the page.
@@ -1913,10 +1916,10 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
 
         # ── Stat cards ──
         stats_row = QHBoxLayout(); stats_row.setSpacing(16)
-        self._sc_contexts  = StatCard("Contexts",  "0", "\u25a6")
-        self._sc_finds     = StatCard("Finds",     "0", "\u2697", accent=_c.get('accent_3'))
-        self._sc_skeletons = StatCard("Skeletons", "0", "\u2620", accent=_c.get('accent_2'))
-        self._sc_drawings  = StatCard("Drawings",  "0", "\u25a1", accent=_c.get('status_ok'))
+        self._sc_contexts  = StatCard("Contexts",  "0", "layers")
+        self._sc_finds     = StatCard("Finds",     "0", "finds",     accent=_c.get('accent_3'))
+        self._sc_skeletons = StatCard("Skeletons", "0", "clipboard", accent=_c.get('accent_2'))
+        self._sc_drawings  = StatCard("Drawings",  "0", "map",       accent=_c.get('status_ok'))
         for sc in [self._sc_contexts, self._sc_finds, self._sc_skeletons, self._sc_drawings]:
             stats_row.addWidget(sc, 1)
         outer.addLayout(stats_row)

@@ -3578,12 +3578,13 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         pat = re.compile(r'(\d+)\s*\.\s*(\d+)\s*(?:\((\d+)\))?')
         exts = ('.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp', '.gif')
         groups = {}
-        for fn in sorted(os.listdir(folder)):
-            if not fn.lower().endswith(exts): continue
-            m = pat.search(os.path.splitext(fn)[0])
-            if not m: continue
-            ctx = int(m.group(1)); obj = int(m.group(2)); ph = int(m.group(3) or 1)
-            groups.setdefault((ctx, obj), []).append((ph, os.path.join(folder, fn)))
+        for root, _dirs, files in os.walk(folder):   # recurse into sub-folders
+            for fn in sorted(files):
+                if not fn.lower().endswith(exts): continue
+                m = pat.search(os.path.splitext(fn)[0])
+                if not m: continue
+                ctx = int(m.group(1)); obj = int(m.group(2)); ph = int(m.group(3) or 1)
+                groups.setdefault((ctx, obj), []).append((ph, os.path.join(root, fn)))
         if not groups:
             QMessageBox.information(self, "Photo import",
                 "No photos matched the pattern, e.g. BAR24-244.005 (1).jpg"); return

@@ -1701,6 +1701,19 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         # Top bar
         self._topbar = TopBar()
         self._topbar.set_title("Home", "Project dashboard & overview")
+        # Global search
+        self._top_search = SearchInput("Search contexts, finds, skeletons…")
+        self._top_search.setFixedWidth(260)
+        self._top_search.textChanged.connect(self._filter_ctx_table)
+        self._topbar.add_action(self._top_search)
+        # Connected-site badge
+        self._top_badge = QLabel("No site"); self._top_badge.setObjectName("infoBox")
+        self._topbar.add_action(self._top_badge)
+        # New record menu
+        _new_btn = QPushButton("＋ New record"); _new_btn.setObjectName("btn_primary")
+        _new_btn.setCursor(Qt.PointingHandCursor)
+        _new_btn.clicked.connect(self._new_record_menu)
+        self._topbar.add_action(_new_btn)
         # Theme toggle button — default: light mode
         self._dark_mode = False
         _theme_btn = QPushButton("🌙 Dark")
@@ -4160,15 +4173,30 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
 
     def _update_site_badge(self):
         site = getattr(self, '_current_site', '')
+        n = sum(1 for cb in [getattr(self, 'ctx_layer_cb', None),
+                             getattr(self, 'pot_layer_cb', None),
+                             getattr(self, 'art_layer_cb', None),
+                             getattr(self, 'ske_layer_cb', None),
+                             getattr(self, 'bone_layer_cb', None)]
+                if cb is not None and cb.currentData() is not None)
+        if hasattr(self, '_top_badge'):
+            self._top_badge.setText(f"  {site} · {n} layers  " if site else "  No site  ")
         if not hasattr(self, '_site_badge'): return
         if site:
-            n = sum(1 for cb in [self.ctx_layer_cb, self.pot_layer_cb,
-                                  self.art_layer_cb, self.ske_layer_cb,
-                                  self.bone_layer_cb]
-                    if cb is not None and cb.currentData() is not None)
             self._site_badge.set_connected(site, n)
         else:
             self._site_badge.set_disconnected()
+
+    def _new_record_menu(self):
+        """Topbar '+ New record' — jump to the right section and start adding."""
+        from qgis.PyQt.QtWidgets import QMenu
+        from qgis.PyQt.QtGui import QCursor
+        m = QMenu(self)
+        m.addAction("Context", lambda: (self._switch_nav_to("Stratigraphy"), self._add_ctx()))
+        m.addAction("Pottery",  lambda: (self._switch_nav_to("Finds"), self._add_linked("pot")))
+        m.addAction("Artifact", lambda: (self._switch_nav_to("Finds"), self._add_linked("art")))
+        m.addAction("Skeleton", lambda: (self._switch_nav_to("Recording"), self._add_skeleton()))
+        m.exec_(QCursor.pos())
 
     def _scan_sites(self):
         """Detect site prefixes from loaded layers."""

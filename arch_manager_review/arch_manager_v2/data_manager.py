@@ -20,12 +20,18 @@ SCHEMAS = {
         ('context_num', QVariant.Int), ('form', QVariant.String),
         ('part', QVariant.String), ('count', QVariant.Int),
         ('origin', QVariant.String), ('period', QVariant.String),
-        ('notes', QVariant.String),
+        ('crate', QVariant.String), ('notes', QVariant.String),
     ],
     'artifacts': [
         ('context_num', QVariant.Int), ('type', QVariant.String),
         ('material', QVariant.String), ('description', QVariant.String),
-        ('period', QVariant.String), ('notes', QVariant.String),
+        ('period', QVariant.String), ('crate', QVariant.String),
+        ('notes', QVariant.String),
+    ],
+    'crates': [
+        ('crate_label', QVariant.String), ('site', QVariant.String),
+        ('season', QVariant.String), ('location', QVariant.String),
+        ('description', QVariant.String), ('notes', QVariant.String),
     ],
     'skeletons': [
         ('skeleton_num', QVariant.Int), ('context_num', QVariant.Int),

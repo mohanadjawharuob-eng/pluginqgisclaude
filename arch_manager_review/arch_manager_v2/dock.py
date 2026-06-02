@@ -204,13 +204,18 @@ def read_xlsx(path):
 
 # ── Dialogs ───────────────────────────────────────────────────────────────────
 class RecordDialog(QDialog):
-    def __init__(self,fields_list,defaults=None,title="Record",parent=None):
+    def __init__(self,fields_list,defaults=None,title="Record",parent=None,extra_options=None):
         super().__init__(parent); self.setWindowTitle(title); self.setMinimumWidth(420)
-        self._w={}; fl=QFormLayout(self); defaults=defaults or {}
+        self._w={}; fl=QFormLayout(self); defaults=defaults or {}; extra_options=extra_options or {}
         for name,qtype in fields_list:
             val=str(defaults.get(name,'') or '')
             norm=name.lower().replace(' ','_')
-            if norm in VOCAB_MAP:
+            if norm in extra_options:
+                w=QComboBox(); w.setEditable(True); w.addItems(['']+list(extra_options[norm]))
+                idx=w.findText(val,Qt.MatchFixedString)
+                if idx>=0: w.setCurrentIndex(idx)
+                else: w.setEditText(val)
+            elif norm in VOCAB_MAP:
                 w=QComboBox(); w.setEditable(True); w.addItems(['']+VOCAB_MAP[norm])
                 idx=w.findText(val,Qt.MatchFixedString)
                 if idx>=0: w.setCurrentIndex(idx)
@@ -1008,6 +1013,7 @@ class _HistoryAndTabsMixin:
             self.draw_filter.clear(); self.draw_filter.addItem("All")
             for n in sorted(self.ctx_data.keys()): self.draw_filter.addItem(str(n))
         if hasattr(self,'hist_tbl'): self._load_history()
+        if hasattr(self,'_crate_tiles_layout'): self._reload_crates()
 
 
 
@@ -1734,6 +1740,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             ("Pottery",         self._build_linked_tab("Pottery", "pot", add_to_nav=False)),
             ("Artifacts",       self._build_linked_tab("Artifacts", "art", add_to_nav=False)),
             ("Artifact Detail", self._build_artdet_tab()),
+            ("Crates",          self._build_crates_tab()),
         ])
         recording  = self._build_recording_tab()
         field      = self._section([
@@ -1993,6 +2000,198 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         scroll_area.setWidget(scroll_content)
         page_layout.addWidget(scroll_area, 1)
         return page
+
+    # ── Crates (virtual storage boxes) ─────────────────────────────────────
+    def _build_crates_tab(self):
+        """Crates: box tiles on top, the selected crate's finds listed below."""
+        w = QWidget(); w.setStyleSheet("background:transparent;")
+        vl = QVBoxLayout(w); vl.setContentsMargins(16, 16, 16, 16); vl.setSpacing(12)
+        bar = QHBoxLayout(); bar.setSpacing(8)
+        t = QLabel("Crates"); t.setObjectName("h3"); bar.addWidget(t); bar.addStretch()
+        new_btn = QPushButton("+ New crate"); new_btn.setObjectName("btn_primary"); new_btn.clicked.connect(self._add_crate)
+        edit_btn = QPushButton("Edit"); edit_btn.setObjectName("btn_secondary"); edit_btn.clicked.connect(self._edit_crate)
+        del_btn = QPushButton("Delete"); del_btn.setObjectName("btn_danger"); del_btn.clicked.connect(self._delete_crate)
+        mk_btn = QPushButton("Create crates layer"); mk_btn.setObjectName("btn_ghost"); mk_btn.clicked.connect(lambda: (self._create_simple_layer("crates"), self._reload_crates()))
+        rf_btn = QPushButton("Refresh"); rf_btn.setObjectName("btn_secondary"); rf_btn.clicked.connect(self._reload_crates)
+        for b in (new_btn, edit_btn, del_btn, mk_btn, rf_btn): b.setCursor(Qt.PointingHandCursor); bar.addWidget(b)
+        vl.addLayout(bar)
+        # Tiles row (horizontal scroll)
+        self._crate_tiles_scroll = QScrollArea(); self._crate_tiles_scroll.setWidgetResizable(True)
+        self._crate_tiles_scroll.setStyleSheet("QScrollArea{border:none;background:transparent;}")
+        self._crate_tiles_scroll.setFixedHeight(150)
+        host = QWidget(); host.setStyleSheet("background:transparent;")
+        self._crate_tiles_layout = QHBoxLayout(host)
+        self._crate_tiles_layout.setContentsMargins(2, 2, 2, 2); self._crate_tiles_layout.setSpacing(12)
+        self._crate_tiles_layout.setAlignment(Qt.AlignLeft)
+        self._crate_tiles_scroll.setWidget(host)
+        vl.addWidget(self._crate_tiles_scroll)
+        # Contents
+        self._crate_contents_lbl = QLabel("Select a crate to see its contents")
+        self._crate_contents_lbl.setObjectName("h4")
+        vl.addWidget(self._crate_contents_lbl)
+        cbar = QHBoxLayout(); cbar.addStretch()
+        ap = QPushButton("Add pottery"); ap.setObjectName("btn_secondary"); ap.clicked.connect(lambda: self._assign_finds_to_crate("pot"))
+        aa = QPushButton("Add artifact"); aa.setObjectName("btn_secondary"); aa.clicked.connect(lambda: self._assign_finds_to_crate("art"))
+        rm = QPushButton("Remove from crate"); rm.setObjectName("btn_ghost"); rm.clicked.connect(self._remove_find_from_crate)
+        for b in (ap, aa, rm): b.setCursor(Qt.PointingHandCursor); cbar.addWidget(b)
+        vl.addLayout(cbar)
+        self._crate_contents_tbl = self._mktbl()
+        vl.addWidget(self._crate_contents_tbl, 1)
+        self._current_crate = None
+        self._reload_crates()
+        return w
+
+    def _crate_counts(self):
+        """Return {crate_label: number_of_finds} across pottery + artifacts."""
+        counts = {}
+        for cb in (getattr(self, "pot_layer_cb", None), getattr(self, "art_layer_cb", None)):
+            lyr = self._lyr(cb) if cb is not None else None
+            if not lyr or lyr.fields().indexOf("crate") < 0: continue
+            for f in lyr.getFeatures():
+                lab = fmt_cell(f.attribute("crate"))
+                if lab: counts[lab] = counts.get(lab, 0) + 1
+        return counts
+
+    def _crate_labels(self):
+        """Sorted list of existing crate labels (for find-form dropdowns)."""
+        lyr = self._lyr(getattr(self, "crate_layer_cb", None))
+        labels = []
+        if lyr and lyr.fields().indexOf("crate_label") >= 0:
+            for f in lyr.getFeatures():
+                lab = fmt_cell(f.attribute("crate_label"))
+                if lab: labels.append(lab)
+        return sorted(set(labels))
+
+    def _reload_crates(self):
+        if not hasattr(self, "_crate_tiles_layout"): return
+        while self._crate_tiles_layout.count():
+            it = self._crate_tiles_layout.takeAt(0)
+            if it.widget(): it.widget().deleteLater()
+        lyr = self._lyr(getattr(self, "crate_layer_cb", None))
+        if not lyr:
+            ph = QLabel("No crates layer — click 'Create crates layer' or set it in Layer Configuration.")
+            ph.setObjectName("muted"); self._crate_tiles_layout.addWidget(ph); return
+        counts = self._crate_counts()
+        n = 0
+        for feat in lyr.getFeatures():
+            label = fmt_cell(feat.attribute("crate_label")) or f"Crate {feat.id()}"
+            loc = fmt_cell(feat.attribute("location"))
+            tile = QPushButton(f"\U0001F4E6  {label}\n{loc or '—'}\n{counts.get(label, 0)} finds")
+            tile.setCheckable(True); tile.setCursor(Qt.PointingHandCursor)
+            tile.setObjectName("crateTile"); tile.setFixedSize(150, 96)
+            tile.clicked.connect(lambda _=False, lb=label, fid=feat.id(): self._on_crate_selected(lb, fid))
+            self._crate_tiles_layout.addWidget(tile); n += 1
+        if n == 0:
+            ph = QLabel("No crates yet — click '+ New crate'."); ph.setObjectName("muted")
+            self._crate_tiles_layout.addWidget(ph)
+        self._crate_tiles_layout.addStretch()
+
+    def _on_crate_selected(self, label, fid):
+        self._current_crate = (label, fid)
+        self._crate_contents_lbl.setText(f"Contents of crate '{label}'")
+        self._load_crate_contents(label)
+
+    def _load_crate_contents(self, label):
+        rows = []; fids = []
+        for kind, cb in (("Pottery", getattr(self, "pot_layer_cb", None)),
+                         ("Artifact", getattr(self, "art_layer_cb", None))):
+            lyr = self._lyr(cb) if cb is not None else None
+            if not lyr or lyr.fields().indexOf("crate") < 0: continue
+            for f in lyr.getFeatures():
+                if fmt_cell(f.attribute("crate")) != label: continue
+                ctx = fmt_cell(f.attribute("context_num"))
+                desc = fmt_cell(f.attribute("form")) or fmt_cell(f.attribute("type")) or ""
+                rows.append([kind, ctx, desc]); fids.append((lyr, f.id()))
+        self._crate_contents_tbl.setColumnCount(3)
+        self._crate_contents_tbl.setHorizontalHeaderLabels(["Kind", "Context", "Description"])
+        self._crate_contents_tbl.setRowCount(len(rows))
+        self._crate_contents_tbl.setProperty("_crate_fids", fids)
+        for ri, row in enumerate(rows):
+            for ci, v in enumerate(row):
+                self._crate_contents_tbl.setItem(ri, ci, QTableWidgetItem(fmt_cell(v)))
+
+    def _add_crate(self):
+        lyr = self._lyr(getattr(self, "crate_layer_cb", None))
+        if not lyr:
+            QMessageBox.warning(self, "", "No crates layer. Click 'Create crates layer' first."); return
+        defaults = {"site": getattr(self, "_current_site", "")}
+        dlg = RecordDialog(self._schema_for(lyr), defaults=defaults, title="New Crate", parent=self)
+        if dlg.exec_() != QDialog.Accepted: return
+        self._write_feat(lyr, dlg.values()); self._reload_crates()
+
+    def _edit_crate(self):
+        if not getattr(self, "_current_crate", None):
+            QMessageBox.information(self, "", "Click a crate tile first."); return
+        lyr = self._lyr(getattr(self, "crate_layer_cb", None))
+        if not lyr: return
+        fid = self._current_crate[1]; feat = lyr.getFeature(fid)
+        defs = {f.name(): feat.attribute(f.name()) for f in lyr.fields()}
+        dlg = RecordDialog(self._schema_for(lyr), defaults=defs, title="Edit Crate", parent=self)
+        if dlg.exec_() != QDialog.Accepted: return
+        self._write_feat(lyr, dlg.values(), fid=fid); self._reload_crates()
+
+    def _delete_crate(self):
+        if not getattr(self, "_current_crate", None):
+            QMessageBox.information(self, "", "Click a crate tile first."); return
+        if QMessageBox.question(self, "Delete crate",
+                "Delete this crate? Finds stay but lose their crate assignment.",
+                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes: return
+        lyr = self._lyr(getattr(self, "crate_layer_cb", None))
+        if lyr:
+            try:
+                lyr.startEditing(); lyr.deleteFeature(self._current_crate[1]); lyr.commitChanges()
+            except Exception: pass
+        self._current_crate = None; self._reload_crates()
+        self._crate_contents_tbl.setRowCount(0)
+
+    def _assign_finds_to_crate(self, pfx):
+        if not getattr(self, "_current_crate", None):
+            QMessageBox.information(self, "", "Click a crate tile first."); return
+        cb = getattr(self, f"{pfx}_layer_cb", None)
+        lyr = self._lyr(cb) if cb is not None else None
+        if not lyr:
+            QMessageBox.warning(self, "", f"No {pfx} layer set."); return
+        if lyr.fields().indexOf("crate") < 0:
+            QMessageBox.warning(self, "", "This layer has no 'crate' column. Use '+ Col' to add it, "
+                                "or recreate the layer."); return
+        label = self._current_crate[0]
+        dlg = QDialog(self); dlg.setWindowTitle(f"Add {pfx} to crate '{label}'"); dlg.resize(460, 420)
+        dv = QVBoxLayout(dlg)
+        dv.addWidget(QLabel("Select finds to place in this crate (unassigned shown first):"))
+        lst = QListWidget(); lst.setSelectionMode(QAbstractItemView.MultiSelection)
+        items = []
+        for f in lyr.getFeatures():
+            cur = fmt_cell(f.attribute("crate"))
+            ctx = fmt_cell(f.attribute("context_num"))
+            desc = fmt_cell(f.attribute("form")) or fmt_cell(f.attribute("type")) or ""
+            tag = f"  [in {cur}]" if cur and cur != label else (" [here]" if cur == label else "")
+            it = QListWidgetItem(f"Ctx {ctx} — {desc}{tag}")
+            it.setData(Qt.UserRole, f.id()); lst.addItem(it); items.append(it)
+        dv.addWidget(lst, 1)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(dlg.accept); bb.rejected.connect(dlg.reject); dv.addWidget(bb)
+        if dlg.exec_() != QDialog.Accepted: return
+        idx = lyr.fields().indexOf("crate"); chosen = lst.selectedItems()
+        if not chosen: return
+        lyr.startEditing()
+        for it in chosen:
+            lyr.changeAttributeValue(it.data(Qt.UserRole), idx, label)
+        lyr.commitChanges()
+        self._load_crate_contents(label); self._reload_crates()
+        self._msg(f"Assigned {len(chosen)} find(s) to crate '{label}'")
+
+    def _remove_find_from_crate(self):
+        rows = self._crate_contents_tbl.selectionModel().selectedRows() if self._crate_contents_tbl.selectionModel() else []
+        fids = self._crate_contents_tbl.property("_crate_fids") or []
+        if not rows: QMessageBox.information(self, "", "Select a row first."); return
+        for r in rows:
+            if r.row() < len(fids):
+                lyr, fid = fids[r.row()]
+                idx = lyr.fields().indexOf("crate")
+                if idx >= 0:
+                    lyr.startEditing(); lyr.changeAttributeValue(fid, idx, None); lyr.commitChanges()
+        if getattr(self, "_current_crate", None):
+            self._load_crate_contents(self._current_crate[0]); self._reload_crates()
 
     def _build_media_tab(self):
         """Photo/Media gallery with categories."""
@@ -2937,6 +3136,9 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         lf.addRow(_rl("Layer:"), self.art_layer_cb)
         self.art_num_field = QComboBox()
         lf.addRow(_rl("Num:"), self.art_num_field)
+        lf.addRow(_sl("Crates"))
+        self.crate_layer_cb = QComboBox()
+        lf.addRow(_rl("Layer:"), self.crate_layer_cb)
         lf.addRow(_sl("Skeletons"))
         self.ske_layer_cb = QComboBox()
         lf.addRow(_rl("Layer:"), self.ske_layer_cb)
@@ -3849,6 +4051,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             ('contexts',              self.ctx_layer_cb),
             ('pottery',               self.pot_layer_cb),
             ('artifacts',             self.art_layer_cb),
+            ('crates',                self.crate_layer_cb),
             ('skeletons',             self.ske_layer_cb),
             ('bone_inventory',        self.bone_layer_cb),
             ('artifact_details',      self.artdet_layer_cb),
@@ -3955,7 +4158,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                 if cb.itemData(i)==prev: cb.setCurrentIndex(i); break
             cb.blockSignals(False)
         ad_cb_list=[self.pot_layer_cb,self.art_layer_cb,self.ske_layer_cb,self.bone_layer_cb]
-        for _cb in ['artdet_layer_cb','draw_layer_cb','hist_layer_cb','grid_layer_cb','ctx_rel_layer_cb']:
+        for _cb in ['artdet_layer_cb','draw_layer_cb','hist_layer_cb','grid_layer_cb','ctx_rel_layer_cb','crate_layer_cb']:
             if hasattr(self,_cb): ad_cb_list.append(getattr(self,_cb))
         for cb in ad_cb_list:
             prev=cb.currentData(); cb.blockSignals(True); cb.clear()
@@ -4191,7 +4394,8 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         if ri>=len(fids): return
         fid=fids[ri]; feat=lyr.getFeature(fid)
         defs={f.name():feat.attribute(f.name()) for f in lyr.fields()}
-        dlg=RecordDialog(self._schema_for(lyr),defaults=defs,title="Edit Record",parent=self)
+        dlg=RecordDialog(self._schema_for(lyr),defaults=defs,title="Edit Record",parent=self,
+                         extra_options={'crate': self._crate_labels()})
         if dlg.exec_()!=QDialog.Accepted: return
         self._write_feat(lyr,dlg.values(),fid=fid)
         if pfx=='ctx': self._load_all()
@@ -4203,7 +4407,8 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         if not lyr: QMessageBox.warning(self,"",f"Set the {pfx} layer first."); return
         fcb=getattr(self,f"{pfx}_fcb"); nf=getattr(self,f"{pfx}_num_field").currentText()
         defs={nf:fcb.currentText()} if nf!="— none —" and fcb.currentText()!="All" else {}
-        dlg=RecordDialog(self._schema_for(lyr),defaults=defs,title="Add Record",parent=self)
+        dlg=RecordDialog(self._schema_for(lyr),defaults=defs,title="Add Record",parent=self,
+                         extra_options={'crate': self._crate_labels()})
         if dlg.exec_()!=QDialog.Accepted: return
         self._write_feat(lyr,dlg.values()); self._reload_linked(pfx)
 

@@ -1158,6 +1158,19 @@ QLabel#mapPlaceholder {{
     border:2px dashed {c['border']}; border-radius:8px;
     color:{c['text_muted']}; background:transparent;
 }}
+
+/* ── Crate tiles (virtual storage boxes) ─────────────────────────────── */
+QPushButton#crateTile {{
+    background:{c['bg_card']}; color:{c['text']};
+    border:1px solid {c['border']}; border-radius:10px;
+    font-size:11px; font-weight:600; padding:6px; text-align:center;
+}}
+QPushButton#crateTile:hover {{
+    border-color:{c['border_strong']}; background:{c['bg_hover']};
+}}
+QPushButton#crateTile:checked {{
+    border:2px solid {c['accent']}; background:{c['bg_card_2']};
+}}
 """
 
 

@@ -3558,8 +3558,12 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         if not isinstance(getattr(self, '_photo_registry', None), dict):
             self._photo_registry = {'photos': [], 'drawings': [], 'refs': []}
         self._photo_registry.setdefault('photos', [])
+        self._ensure_field(lyr, 'full_id', QVariant.String)
+        self._ensure_field(lyr, 'artifact_id', QVariant.Int)
         idx_img = lyr.fields().indexOf('image_path')
         idx_find = lyr.fields().indexOf('find_num')
+        idx_full = lyr.fields().indexOf('full_id')
+        idx_aid = lyr.fields().indexOf('artifact_id')
         existing = {}
         for f in lyr.getFeatures():
             existing[(safe_int(f, 'context_num'), safe_int(f, 'find_num'))] = f.id()
@@ -3587,6 +3591,8 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                 feat = QgsFeature(lyr.fields())
                 feat.setAttribute('context_num', ctx)
                 if idx_find >= 0: feat.setAttribute('find_num', obj)
+                if idx_full >= 0: feat.setAttribute('full_id', f"{ctx}.{obj:03d}")
+                if idx_aid >= 0: feat.setAttribute('artifact_id', ctx * 1000 + obj)
                 if idx_img >= 0: feat.setAttribute('image_path', main_path)
                 lyr.addFeature(feat); created += 1
         lyr.commitChanges()
@@ -3682,12 +3688,22 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
 
     def _load_artdet_list(self):
         art_lyr=self._lyr(self.art_layer_cb)
+        # Fall back to the artifact_details layer if there's no artifacts layer
+        # or it's empty — so photo-imported records are visible.
+        listing_details=False
+        if not art_lyr or art_lyr.featureCount()==0:
+            adl=self._lyr(getattr(self,'artdet_layer_cb',None))
+            if adl: art_lyr=adl; listing_details=True
         if not art_lyr: return
         fnames=[f.name() for f in art_lyr.fields()]
         # Identify key columns
-        id_fn    = next((f for f in ['id','fid','artifact_id'] if f in fnames), fnames[0] if fnames else None)
+        if listing_details:
+            id_fn  = 'artifact_id' if 'artifact_id' in fnames else (fnames[0] if fnames else None)
+            type_fn= next((f for f in ['full_id','find_num','type','material','description'] if f in fnames), None)
+        else:
+            id_fn  = next((f for f in ['id','fid','artifact_id'] if f in fnames), fnames[0] if fnames else None)
+            type_fn= next((f for f in ['full_id','type','material','description','find_num'] if f in fnames), None)
         ctx_fn   = next((f for f in ['context_num','ctx_num','context_id'] if f in fnames), None)
-        type_fn  = next((f for f in ['type','material','description'] if f in fnames), None)
         feats=list(art_lyr.getFeatures())
         self.artdet_list.setRowCount(len(feats))
         self.artdet_list.setProperty("_art_ids",[f.id() for f in feats])

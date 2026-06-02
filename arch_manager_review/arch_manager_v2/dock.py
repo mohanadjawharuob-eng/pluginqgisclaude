@@ -3276,11 +3276,39 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         sv.addWidget(self._ctx_detail)
         self._ctx_relations = DetailPanel("Relations")
         sv.addWidget(self._ctx_relations)
+        _flash = QPushButton("📍  Flash on map"); _flash.setObjectName("btn_secondary")
+        _flash.setCursor(Qt.PointingHandCursor)
+        _flash.setToolTip("Zoom to and flash the selected context on the QGIS canvas")
+        _flash.clicked.connect(self._flash_selected_ctx)
+        sv.addWidget(_flash)
         sv.addStretch()
         side.setMinimumWidth(280); side.setMaximumWidth(340)
         split.addWidget(side, 1)
         outer.addLayout(split, 1)
         return page
+
+    def _count_finds_in_ctx(self, cb, ctx_num):
+        """Count features in a finds layer whose context_num matches."""
+        lyr = self._lyr(cb) if cb is not None else None
+        if not lyr or lyr.fields().indexOf("context_num") < 0:
+            return 0
+        try:
+            target = int(ctx_num)
+        except Exception:
+            return 0
+        return sum(1 for f in lyr.getFeatures() if safe_int(f, "context_num") == target)
+
+    def _flash_selected_ctx(self):
+        """Zoom to + flash the selected context on the map (mockup 'Flash on map')."""
+        rows = self.ctx_tbl.selectionModel().selectedRows() if self.ctx_tbl.selectionModel() else []
+        if not rows:
+            self._msg("Select a context row first"); return
+        ri = rows[0].row(); fids = self.ctx_tbl.property("_fids") or []
+        if ri >= len(fids): return
+        lyr = self._lyr(self.ctx_layer_cb)
+        if lyr:
+            lyr.removeSelection(); lyr.select(fids[ri])
+            self._flash_feature(lyr, fids[ri], zoom=True)
 
     def _filter_ctx_table(self, text):
         """Filter visible rows in the contexts table."""
@@ -3326,6 +3354,13 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                     v = feat.attribute(fn)
                     is_pill = label in ("Type", "Period")
                     self._ctx_detail.add_field(label, v, pill=is_pill)
+            try:
+                if ctx_num not in (None, "?", ""):
+                    npot = self._count_finds_in_ctx(self.pot_layer_cb, ctx_num)
+                    nart = self._count_finds_in_ctx(self.art_layer_cb, ctx_num)
+                    self._ctx_detail.add_field("Finds", f"{npot} pottery · {nart} artifacts")
+            except Exception:
+                pass
             # Relations panel
             self._ctx_relations.clear()
             for label, fname_cb in [

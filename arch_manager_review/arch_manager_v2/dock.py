@@ -61,7 +61,7 @@ from .data_manager import (SCHEMAS, TABLE_NAMES, coerce, vlayers as dm_vlayers,
                             lyr_from_cb, schema_for, write_feature, delete_features,
                             create_project as dm_create_project, open_gpkg as dm_open_gpkg,
                             detect_sites, find_layer, safe_int, user_data_path,
-                            fmt_cell)
+                            user_data_dir, fmt_cell)
 from .recording_sheets import RecordingSheetsTab
 from .harris_view import HarrisView
 
@@ -3457,12 +3457,113 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         return w
 
 
+    def _ensure_field(self, lyr, name, qtype):
+        """Add a field to a layer if it doesn't already have it."""
+        if lyr is not None and lyr.fields().indexOf(name) < 0:
+            try:
+                lyr.dataProvider().addAttributes([QgsField(name, qtype)])
+                lyr.updateFields()
+            except Exception:
+                pass
+
+    def _import_match_photos(self):
+        """Scan a folder of artifact photos named like 'BAR23-101.004 (1)',
+        copy them into the project, and match each to an Artifact Detail record
+        by context + object number (one main photo shown per artifact; all
+        photos go to Media → Photos)."""
+        import shutil, re
+        folder = QFileDialog.getExistingDirectory(self, "Select the folder of artifact photos")
+        if not folder:
+            return
+        lyr = self._lyr(getattr(self, 'artdet_layer_cb', None))
+        if not lyr:
+            lyr = self._create_simple_layer('artifact_details', path=self._current_gpkg_path())
+            if lyr is None:
+                QMessageBox.warning(self, "", "Set or create an Artifact Details layer first "
+                                    "(Layer Configuration → Artifact Detail)."); return
+            self._refresh_combos()
+            for i in range(self.artdet_layer_cb.count()):
+                if self.artdet_layer_cb.itemData(i) == lyr.id():
+                    self.artdet_layer_cb.setCurrentIndex(i); break
+        self._ensure_field(lyr, 'context_num', QVariant.Int)
+        self._ensure_field(lyr, 'find_num', QVariant.Int)
+        self._ensure_field(lyr, 'image_path', QVariant.String)
+        gpkg = self._current_gpkg_path()
+        base = os.path.dirname(gpkg) if gpkg else user_data_dir()
+        dest = os.path.join(base, "ArchManager_media", "artifacts")
+        try: os.makedirs(dest, exist_ok=True)
+        except Exception: pass
+        # Parse SITE-CONTEXT.OBJ (PHOTO) — the context.object pair plus optional (n)
+        pat = re.compile(r'(\d+)\s*\.\s*(\d+)\s*(?:\((\d+)\))?')
+        exts = ('.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp', '.gif')
+        groups = {}
+        for fn in sorted(os.listdir(folder)):
+            if not fn.lower().endswith(exts): continue
+            m = pat.search(os.path.splitext(fn)[0])
+            if not m: continue
+            ctx = int(m.group(1)); obj = int(m.group(2)); ph = int(m.group(3) or 1)
+            groups.setdefault((ctx, obj), []).append((ph, os.path.join(folder, fn)))
+        if not groups:
+            QMessageBox.information(self, "Photo import",
+                "No photos matched the naming pattern, e.g. BAR23-101.004 (1).jpg"); return
+        if not isinstance(getattr(self, '_photo_registry', None), dict):
+            self._photo_registry = {'photos': [], 'drawings': [], 'refs': []}
+        self._photo_registry.setdefault('photos', [])
+        idx_img = lyr.fields().indexOf('image_path')
+        idx_find = lyr.fields().indexOf('find_num')
+        existing = {}
+        for f in lyr.getFeatures():
+            existing[(safe_int(f, 'context_num'), safe_int(f, 'find_num'))] = f.id()
+        copied = matched = created = 0
+        lyr.startEditing()
+        for (ctx, obj), photos in sorted(groups.items()):
+            photos.sort()
+            main_path = None
+            for ph, src in photos:
+                dst = os.path.join(dest, os.path.basename(src))
+                try:
+                    if os.path.abspath(src) != os.path.abspath(dst) and not os.path.exists(dst):
+                        shutil.copy2(src, dst)
+                    copied += 1
+                except Exception:
+                    dst = src
+                if main_path is None: main_path = dst
+                self._photo_registry['photos'].append(
+                    {'path': dst, 'context': str(ctx), 'caption': f"Artifact {ctx}.{obj:03d} ({ph})"})
+            fid = existing.get((ctx, obj))
+            if fid is not None:
+                if idx_img >= 0: lyr.changeAttributeValue(fid, idx_img, main_path)
+                matched += 1
+            else:
+                feat = QgsFeature(lyr.fields())
+                feat.setAttribute('context_num', ctx)
+                if idx_find >= 0: feat.setAttribute('find_num', obj)
+                if idx_img >= 0: feat.setAttribute('image_path', main_path)
+                lyr.addFeature(feat); created += 1
+        lyr.commitChanges()
+        self._save_gallery_registry(); self._load_gallery_registry()
+        try: self._load_artdet_list()
+        except Exception: pass
+        QMessageBox.information(self, "Photo import",
+            f"Copied {copied} photo(s) into the project gallery.\n"
+            f"Matched {matched} existing and created {created} new artifact record(s).\n\n"
+            f"One photo is shown per artifact; all photos are in Media → Photos.")
+
     def _build_artdet_tab(self):
         """Artifact detail sub-form: image + full description per artifact ID"""
         w = QWidget(); w.setStyleSheet("background:transparent;")
         outer_vl = QVBoxLayout(w); outer_vl.setContentsMargins(0, 0, 0, 0); outer_vl.setSpacing(0)
         outer_vl.addWidget(ContentTitle("Artifact Detail",
                                         "Image and extended description for each artifact find"))
+        _tb = QHBoxLayout(); _tb.setContentsMargins(16, 0, 16, 0)
+        _imp = QPushButton("📷  Import && match photos…"); _imp.setObjectName("btn_primary")
+        _imp.setCursor(Qt.PointingHandCursor)
+        _imp.setToolTip("Pick a folder of photos named like 'BAR23-101.004 (1).jpg' — "
+                        "they are copied into the project and matched to artifacts by "
+                        "context.object number")
+        _imp.clicked.connect(self._import_match_photos)
+        _tb.addStretch(); _tb.addWidget(_imp)
+        outer_vl.addLayout(_tb)
         body = QWidget(); body.setStyleSheet("background:transparent;")
         main = QHBoxLayout(body); main.setContentsMargins(16, 8, 16, 16); main.setSpacing(12)
         outer_vl.addWidget(body, 1)

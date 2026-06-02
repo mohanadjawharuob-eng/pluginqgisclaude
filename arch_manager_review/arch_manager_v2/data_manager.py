@@ -48,6 +48,7 @@ SCHEMAS = {
     ],
     'artifact_details': [
         ('artifact_id', QVariant.Int), ('context_num', QVariant.Int),
+        ('find_num', QVariant.Int),
         ('image_path', QVariant.String), ('detailed_description', QVariant.String),
         ('condition', QVariant.String), ('material_detail', QVariant.String),
         ('provenance', QVariant.String), ('dimensions', QVariant.String),

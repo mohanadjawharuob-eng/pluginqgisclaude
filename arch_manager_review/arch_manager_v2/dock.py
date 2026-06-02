@@ -1710,9 +1710,10 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         self._top_badge = QLabel("No site"); self._top_badge.setObjectName("infoBox")
         self._topbar.add_action(self._top_badge)
         # New record menu
-        _new_btn = QPushButton("＋ New record"); _new_btn.setObjectName("btn_primary")
+        _new_btn = QPushButton("🗺  New site"); _new_btn.setObjectName("btn_primary")
         _new_btn.setCursor(Qt.PointingHandCursor)
-        _new_btn.clicked.connect(self._new_record_menu)
+        _new_btn.setToolTip("Create a new project GeoPackage with all the standard tables")
+        _new_btn.clicked.connect(self._create_project)
         self._topbar.add_action(_new_btn)
         # Theme toggle button — default: light mode
         self._dark_mode = False
@@ -2065,6 +2066,16 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                 if lab: counts[lab] = counts.get(lab, 0) + 1
         return counts
 
+    def _attr(self, feat, name):
+        """Read a feature attribute by name; None if the field is absent
+        (feat.attribute() raises KeyError for unknown fields)."""
+        try:
+            if feat.fields().indexOf(name) >= 0:
+                return feat.attribute(name)
+        except Exception:
+            pass
+        return None
+
     def _crate_labels(self):
         """Sorted list of existing crate labels (for find-form dropdowns)."""
         lyr = self._lyr(getattr(self, "crate_layer_cb", None))
@@ -2119,9 +2130,9 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             lyr = self._lyr(cb) if cb is not None else None
             if not lyr or lyr.fields().indexOf("crate") < 0: continue
             for f in lyr.getFeatures():
-                if fmt_cell(f.attribute("crate")) != label: continue
-                ctx = fmt_cell(f.attribute("context_num"))
-                desc = fmt_cell(f.attribute("form")) or fmt_cell(f.attribute("type")) or ""
+                if fmt_cell(self._attr(f, "crate")) != label: continue
+                ctx = fmt_cell(self._attr(f, "context_num"))
+                desc = fmt_cell(self._attr(f, "form")) or fmt_cell(self._attr(f, "type")) or ""
                 rows.append([kind, ctx, desc]); fids.append((lyr, f.id()))
         self._crate_contents_tbl.setColumnCount(3)
         self._crate_contents_tbl.setHorizontalHeaderLabels(["Kind", "Context", "Description"])
@@ -2183,9 +2194,9 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         lst = QListWidget(); lst.setSelectionMode(QAbstractItemView.MultiSelection)
         items = []
         for f in lyr.getFeatures():
-            cur = fmt_cell(f.attribute("crate"))
-            ctx = fmt_cell(f.attribute("context_num"))
-            desc = fmt_cell(f.attribute("form")) or fmt_cell(f.attribute("type")) or ""
+            cur = fmt_cell(self._attr(f, "crate"))
+            ctx = fmt_cell(self._attr(f, "context_num"))
+            desc = fmt_cell(self._attr(f, "form")) or fmt_cell(self._attr(f, "type")) or ""
             tag = f"  [in {cur}]" if cur and cur != label else (" [here]" if cur == label else "")
             it = QListWidgetItem(f"Ctx {ctx} — {desc}{tag}")
             it.setData(Qt.UserRole, f.id()); lst.addItem(it); items.append(it)
@@ -3516,33 +3527,54 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                 pass
 
     def _import_match_photos(self):
-        """Scan a folder of artifact photos named like 'BAR23-101.004 (1)',
-        copy them into the project, and match each to an Artifact Detail record
-        by context + object number (one main photo shown per artifact; all
-        photos go to Media → Photos)."""
+        """Scan a folder of artifact photos named like 'BAR24-244.005 (1)'
+        (site/year, context, object-number-within-context, photo-number), copy
+        them into the project, and attach each to the matching artifact. The
+        object number is positional: object N = the Nth artifact recorded in
+        that context. One main photo per artifact; all go to Media -> Photos."""
         import shutil, re
         folder = QFileDialog.getExistingDirectory(self, "Select the folder of artifact photos")
         if not folder:
             return
-        lyr = self._lyr(getattr(self, 'artdet_layer_cb', None))
-        if not lyr:
-            lyr = self._create_simple_layer('artifact_details', path=self._current_gpkg_path())
-            if lyr is None:
-                QMessageBox.warning(self, "", "Set or create an Artifact Details layer first "
-                                    "(Layer Configuration → Artifact Detail)."); return
+        art_lyr = self._lyr(getattr(self, 'art_layer_cb', None))
+        if not art_lyr:
+            QMessageBox.warning(self, "", "Set the Artifacts layer first "
+                                "(Layer Configuration \u2192 Artifacts)."); return
+        det_lyr = self._lyr(getattr(self, 'artdet_layer_cb', None))
+        if not det_lyr:
+            det_lyr = self._create_simple_layer('artifact_details', path=self._current_gpkg_path())
+            if det_lyr is None:
+                QMessageBox.warning(self, "", "Couldn't create an Artifact Details layer."); return
             self._refresh_combos()
             for i in range(self.artdet_layer_cb.count()):
-                if self.artdet_layer_cb.itemData(i) == lyr.id():
+                if self.artdet_layer_cb.itemData(i) == det_lyr.id():
                     self.artdet_layer_cb.setCurrentIndex(i); break
-        self._ensure_field(lyr, 'context_num', QVariant.Int)
-        self._ensure_field(lyr, 'find_num', QVariant.Int)
-        self._ensure_field(lyr, 'image_path', QVariant.String)
+        for nm, qt in (('artifact_id', QVariant.Int), ('context_num', QVariant.Int),
+                       ('find_num', QVariant.Int), ('full_id', QVariant.String),
+                       ('image_path', QVariant.String)):
+            self._ensure_field(det_lyr, nm, qt)
         gpkg = self._current_gpkg_path()
         base = os.path.dirname(gpkg) if gpkg else user_data_dir()
         dest = os.path.join(base, "ArchManager_media", "artifacts")
         try: os.makedirs(dest, exist_ok=True)
         except Exception: pass
-        # Parse SITE-CONTEXT.OBJ (PHOTO) — the context.object pair plus optional (n)
+
+        def _num(v):
+            try: return int(float(str(v)))
+            except Exception: return None
+
+        # Index artifacts by context, ordered (object N = position within context)
+        afn = [f.name() for f in art_lyr.fields()]
+        aid_fn = next((f for f in ['id', 'fid', 'artifact_id'] if f in afn), None)
+        actx_fn = next((f for f in ['context_num', 'ctx_num', 'context_id'] if f in afn), None)
+        by_ctx = {}
+        for f in art_lyr.getFeatures():
+            c = _num(f.attribute(actx_fn)) if actx_fn else None
+            aid = f.attribute(aid_fn) if aid_fn else f.id()
+            by_ctx.setdefault(c, []).append(aid)
+        for cnum in by_ctx:
+            by_ctx[cnum].sort(key=lambda a: (_num(a) if _num(a) is not None else 0))
+
         pat = re.compile(r'(\d+)\s*\.\s*(\d+)\s*(?:\((\d+)\))?')
         exts = ('.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp', '.gif')
         groups = {}
@@ -3554,21 +3586,17 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             groups.setdefault((ctx, obj), []).append((ph, os.path.join(folder, fn)))
         if not groups:
             QMessageBox.information(self, "Photo import",
-                "No photos matched the naming pattern, e.g. BAR23-101.004 (1).jpg"); return
+                "No photos matched the pattern, e.g. BAR24-244.005 (1).jpg"); return
         if not isinstance(getattr(self, '_photo_registry', None), dict):
             self._photo_registry = {'photos': [], 'drawings': [], 'refs': []}
         self._photo_registry.setdefault('photos', [])
-        self._ensure_field(lyr, 'full_id', QVariant.String)
-        self._ensure_field(lyr, 'artifact_id', QVariant.Int)
-        idx_img = lyr.fields().indexOf('image_path')
-        idx_find = lyr.fields().indexOf('find_num')
-        idx_full = lyr.fields().indexOf('full_id')
-        idx_aid = lyr.fields().indexOf('artifact_id')
-        existing = {}
-        for f in lyr.getFeatures():
-            existing[(safe_int(f, 'context_num'), safe_int(f, 'find_num'))] = f.id()
-        copied = matched = created = 0
-        lyr.startEditing()
+
+        def di(n): return det_lyr.fields().indexOf(n)
+        det_existing = {}
+        for f in det_lyr.getFeatures():
+            det_existing[_num(f.attribute('artifact_id'))] = f.id()
+        copied = matched = created = unmatched = 0
+        det_lyr.startEditing()
         for (ctx, obj), photos in sorted(groups.items()):
             photos.sort()
             main_path = None
@@ -3583,26 +3611,33 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                 if main_path is None: main_path = dst
                 self._photo_registry['photos'].append(
                     {'path': dst, 'context': str(ctx), 'caption': f"Artifact {ctx}.{obj:03d} ({ph})"})
-            fid = existing.get((ctx, obj))
+            arts = by_ctx.get(ctx, [])
+            if not (1 <= obj <= len(arts)):
+                unmatched += 1; continue
+            tid = _num(arts[obj - 1]); full_id = f"{ctx}.{obj:03d}"
+            fid = det_existing.get(tid)
             if fid is not None:
-                if idx_img >= 0: lyr.changeAttributeValue(fid, idx_img, main_path)
+                if di('image_path') >= 0: det_lyr.changeAttributeValue(fid, di('image_path'), main_path)
+                if di('full_id') >= 0: det_lyr.changeAttributeValue(fid, di('full_id'), full_id)
+                if di('find_num') >= 0: det_lyr.changeAttributeValue(fid, di('find_num'), obj)
                 matched += 1
             else:
-                feat = QgsFeature(lyr.fields())
-                feat.setAttribute('context_num', ctx)
-                if idx_find >= 0: feat.setAttribute('find_num', obj)
-                if idx_full >= 0: feat.setAttribute('full_id', f"{ctx}.{obj:03d}")
-                if idx_aid >= 0: feat.setAttribute('artifact_id', ctx * 1000 + obj)
-                if idx_img >= 0: feat.setAttribute('image_path', main_path)
-                lyr.addFeature(feat); created += 1
-        lyr.commitChanges()
+                feat = QgsFeature(det_lyr.fields())
+                if di('artifact_id') >= 0 and tid is not None: feat.setAttribute('artifact_id', tid)
+                if di('context_num') >= 0: feat.setAttribute('context_num', ctx)
+                if di('find_num') >= 0: feat.setAttribute('find_num', obj)
+                if di('full_id') >= 0: feat.setAttribute('full_id', full_id)
+                if di('image_path') >= 0: feat.setAttribute('image_path', main_path)
+                det_lyr.addFeature(feat); created += 1
+        det_lyr.commitChanges()
         self._save_gallery_registry(); self._load_gallery_registry()
         try: self._load_artdet_list()
         except Exception: pass
         QMessageBox.information(self, "Photo import",
             f"Copied {copied} photo(s) into the project gallery.\n"
-            f"Matched {matched} existing and created {created} new artifact record(s).\n\n"
-            f"One photo is shown per artifact; all photos are in Media → Photos.")
+            f"Attached photos to {matched + created} artifact(s).\n"
+            f"{unmatched} photo group(s) had no artifact at that position in their context.\n\n"
+            f"One photo shows per artifact; all photos are in Media \u2192 Photos.")
 
     def _build_artdet_tab(self):
         """Artifact detail sub-form: image + full description per artifact ID"""

@@ -1,8 +1,0 @@
-__pycache__/
-*.pyc
-*.zip
-# runtime user data (kept outside the plugin folder at runtime, but ignore if present)
-arch_manager_v2/user_sheets/
-arch_manager_v2/.user_config.json
-arch_manager_v2/.site_photos.json
-*.media.json

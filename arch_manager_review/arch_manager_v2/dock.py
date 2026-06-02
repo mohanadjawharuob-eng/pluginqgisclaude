@@ -4327,23 +4327,28 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         ]]
         for _cb in _cbs:
             if _cb is not None: _cb.blockSignals(True)
+        loaded = []
         try:
             loaded = dm_open_gpkg(path)
-            self._refresh_combos()
-            self._scan_sites()
-            for _cb in _cbs:
-                if _cb is not None: _cb.blockSignals(False)
+        except Exception as _e:
+            self._msg(f"Open error: {_e}", error=True)
+        # Refresh + scan should run even if loading some layers failed
+        try:
+            self._refresh_combos(); self._scan_sites()
+        except Exception as _e:
+            self._msg(f"Scan error: {_e}", error=True)
+        for _cb in _cbs:
+            if _cb is not None: _cb.blockSignals(False)
+        # Auto-connect a single detected site — but don't let a connect error
+        # abort the open (the layers are loaded and scanned regardless).
+        try:
             if (self.site_select_cb.count() == 1 and
                     not self.site_select_cb.itemText(0).startswith('(')):
                 self._connect_site()
-            n = len(loaded)
-            self._msg(f"Loaded {n} layer{'s' if n!=1 else ''} from {os.path.basename(path)}")
         except Exception as _e:
-            for _cb in _cbs:
-                if _cb is not None: _cb.blockSignals(False)
-            from qgis.PyQt.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Open GeoPackage",
-                f"Error loading site:\n{str(_e)}\n\nIf switching sites, reload QGIS layers first.")
+            self._msg(f"Auto-connect issue (set layers manually): {_e}", error=True)
+        n = len(loaded)
+        self._msg(f"Loaded {n} layer{'s' if n!=1 else ''} from {os.path.basename(path)}")
 
 
     def _create_simple_layer(self, table_name, path=None):
@@ -5033,7 +5038,15 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             if lyr.addFeature(feat): added+=1
             else: errors+=1
         ok=lyr.commitChanges()
-        if not ok: lyr.rollBack()
+        if not ok:
+            errs="; ".join(lyr.commitErrors()) if hasattr(lyr,"commitErrors") else ""
+            lyr.rollBack()
+            self._msg("Import failed — nothing was saved", error=True)
+            QMessageBox.warning(self,"Import failed",
+                f"Could not save {added} record(s) to '{lyr.name()}'.\n\n{errs}\n\n"
+                "Tip: pick a GeoPackage table as the target and make sure it isn't "
+                "open/locked elsewhere.")
+            return
         msg=f"Imported {added} records into '{lyr.name()}'"
         if errors: msg+=f" ({errors} failed)"
         self._msg(msg); QMessageBox.information(self,"Import complete",msg); self._load_all()

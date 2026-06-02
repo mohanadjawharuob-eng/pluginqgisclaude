@@ -2160,8 +2160,9 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         if not lyr:
             QMessageBox.warning(self, "", f"No {pfx} layer set."); return
         if lyr.fields().indexOf("crate") < 0:
-            QMessageBox.warning(self, "", "This layer has no 'crate' column. Use '+ Col' to add it, "
-                                "or recreate the layer."); return
+            self._ensure_field(lyr, "crate", QVariant.String)
+        if lyr.fields().indexOf("crate") < 0:
+            QMessageBox.warning(self, "", "Couldn't add a 'crate' column to this layer."); return
         label = self._current_crate[0]
         dlg = QDialog(self); dlg.setWindowTitle(f"Add {pfx} to crate '{label}'"); dlg.resize(460, 420)
         dv = QVBoxLayout(dlg)

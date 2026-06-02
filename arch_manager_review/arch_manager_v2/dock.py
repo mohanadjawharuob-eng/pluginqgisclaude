@@ -4265,6 +4265,44 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             self._msg("No sites found — open a GeoPackage first")
         self.site_select_cb.blockSignals(False)
 
+    def _connect_gpkg_layers(self, path):
+        """Connect the layer dropdowns to the tables inside a specific GeoPackage
+        by matching each layer's data-source URI — robust for older sites no
+        matter how the layers are named. Returns the number connected."""
+        import os as _os
+        TABLE_CB_MAP = [
+            ('contexts', self.ctx_layer_cb), ('pottery', self.pot_layer_cb),
+            ('artifacts', self.art_layer_cb), ('crates', getattr(self, 'crate_layer_cb', None)),
+            ('skeletons', self.ske_layer_cb), ('bone_inventory', self.bone_layer_cb),
+            ('artifact_details', self.artdet_layer_cb), ('drawings', self.draw_layer_cb),
+            ('edit_history', self.hist_layer_cb), ('context_relationships', self.ctx_rel_layer_cb),
+            ('excavation_grids', self.grid_layer_cb),
+        ]
+        pnorm = _os.path.normpath(path).lower()
+        connected = 0
+        for table, cb in TABLE_CB_MAP:
+            if cb is None: continue
+            for i in range(cb.count()):
+                lid = cb.itemData(i)
+                lyr = QgsProject.instance().mapLayer(lid) if lid else None
+                if not lyr: continue
+                try:
+                    uri = lyr.dataProvider().dataSourceUri().lower()
+                except Exception:
+                    continue
+                gp = _os.path.normpath(uri.split('|')[0]).lower()
+                if gp == pnorm and ("layername=" + table) in uri:
+                    cb.setCurrentIndex(i); connected += 1; break
+        if connected:
+            self._current_site = _os.path.splitext(_os.path.basename(path))[0]
+            self._update_site_badge(); self._on_ctx_layer()
+            for lcb, fcb in [(self.pot_layer_cb, self.pot_num_field),
+                             (self.art_layer_cb, self.art_num_field),
+                             (self.ske_layer_cb, self.ske_num_field)]:
+                self._fill_fcb(lcb, fcb)
+            self._load_all()
+        return connected
+
     def _connect_site(self):
         """Auto-fill all layer dropdowns for the selected site prefix."""
         prefix = self.site_select_cb.currentText().strip()
@@ -4342,13 +4380,14 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         # Auto-connect a single detected site — but don't let a connect error
         # abort the open (the layers are loaded and scanned regardless).
         try:
-            if (self.site_select_cb.count() == 1 and
-                    not self.site_select_cb.itemText(0).startswith('(')):
+            nconn = self._connect_gpkg_layers(path)
+            if not nconn and self.site_select_cb.count() == 1 and \
+                    not self.site_select_cb.itemText(0).startswith('('):
                 self._connect_site()
         except Exception as _e:
             self._msg(f"Auto-connect issue (set layers manually): {_e}", error=True)
         n = len(loaded)
-        self._msg(f"Loaded {n} layer{'s' if n!=1 else ''} from {os.path.basename(path)}")
+        self._msg(f"Opened {os.path.basename(path)} — connected its tables")
 
 
     def _create_simple_layer(self, table_name, path=None):
@@ -4551,13 +4590,15 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         lcb=getattr(self,f"{pfx}_layer_cb"); nfcb=getattr(self,f"{pfx}_num_field")
         tbl=getattr(self,f"{pfx}_tbl"); fcb=getattr(self,f"{pfx}_fcb")
         lyr=self._lyr(lcb); nf=nfcb.currentText()
-        if not lyr or nf=="— none —": tbl.setRowCount(0); return
+        if not lyr: tbl.setRowCount(0); return
         flt=fcb.currentText(); fnames=[f.name() for f in lyr.fields()]
         tbl.setColumnCount(len(fnames)); tbl.setHorizontalHeaderLabels(fnames); feats=[]
+        do_filter = bool(flt) and flt!="All" and nf and nf!="— none —"
         for feat in lyr.getFeatures():
-            try:
-                if flt!="All" and str(int(feat.attribute(nf)))!=flt: continue
-            except Exception: continue
+            if do_filter:
+                try:
+                    if str(int(feat.attribute(nf)))!=flt: continue
+                except Exception: continue
             feats.append(feat)
         tbl.setRowCount(len(feats)); tbl.setProperty("_fids",[f.id() for f in feats])
         for ri,feat in enumerate(feats):
@@ -4614,7 +4655,11 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                 if fi<0: continue
                 lyr.changeAttributeValue(fid,fi,coerce(v,fields.at(fi).type()))
         ok=lyr.commitChanges()
-        if not ok: lyr.rollBack(); self._msg("Save failed")
+        if not ok:
+            errs="; ".join(lyr.commitErrors()) if hasattr(lyr,"commitErrors") else ""
+            lyr.rollBack()
+            self._msg(f"Save failed: {errs}" if errs else "Save failed", error=True)
+        return ok
 
     def _add_ctx(self):
         lyr=self._lyr(self.ctx_layer_cb)

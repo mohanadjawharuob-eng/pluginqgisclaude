@@ -1354,6 +1354,7 @@ class _GridMapMixin:
         if not lyr: return
         lyr.removeSelection(); lyr.select(fids[ri])
         self.iface.mapCanvas().panToSelected(lyr)
+        self._flash_feature(lyr, fids[ri])
         # Fill form with selected grid's data
         feat=lyr.getFeature(fids[ri])
         try:
@@ -4531,7 +4532,8 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         except Exception: return
         self._block=True; self.hv.highlight(num)
         lyr.removeSelection(); lyr.select(fids[ri])
-        self.iface.mapCanvas().panToSelected(lyr); self._block=False
+        self.iface.mapCanvas().panToSelected(lyr)
+        self._flash_feature(lyr, fids[ri]); self._block=False
 
     def _on_qgis_sel(self,sel,desel,clear):
         if self._block or not sel: return
@@ -4542,9 +4544,30 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             self._block=True; self.hv.highlight(num); self._block=False
         except Exception: pass
 
+    def _flash_feature(self, lyr, fid, zoom=False):
+        """Flash (and optionally zoom to) a feature on the QGIS map canvas.
+        No-op for non-spatial layers or missing geometry."""
+        if lyr is None or fid is None:
+            return
+        try:
+            canvas = self.iface.mapCanvas()
+            if zoom:
+                try:
+                    canvas.zoomToFeatureIds(lyr, [fid])
+                except Exception:
+                    lyr.removeSelection(); lyr.select(fid); canvas.panToSelected(lyr)
+            canvas.flashFeatureIds(lyr, [fid])
+        except Exception:
+            pass
+
     def _zoom_ctx(self):
         lyr=self._lyr(self.ctx_layer_cb)
-        if lyr: self.iface.mapCanvas().panToSelected(lyr)
+        if not lyr: return
+        canvas=self.iface.mapCanvas()
+        try: canvas.zoomToSelected(lyr)
+        except Exception: canvas.panToSelected(lyr)
+        sel=list(lyr.selectedFeatureIds())
+        if sel: self._flash_feature(lyr, sel[0], zoom=False)
 
     # ── Import ────────────────────────────────────────────────────────────────
     def _run_import(self,sheets):

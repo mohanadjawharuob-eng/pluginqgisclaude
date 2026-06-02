@@ -12,9 +12,26 @@ from qgis.PyQt.QtWidgets import (
 )
 from qgis.PyQt.QtCore import Qt, QRectF, QDate, QMarginsF, QSize
 from qgis.PyQt.QtGui import (
-    QColor, QPen, QBrush, QPainter, QFont, QPixmap,
+    QColor, QPen, QBrush, QPainter, QFont, QPixmap, QImage,
     QPagedPaintDevice, QFontMetrics
 )
+
+
+def _draw_photo(p, img_path, x, y, w, h):
+    """Draw a photo scaled into (x,y,w,h), returns (drawn_w, drawn_h) or (0,0).
+
+    Draws via QImage over a white fill — drawing a QPixmap straight onto a
+    QPdfWriter can render as a black box on some Qt builds.
+    """
+    img = QImage(img_path)
+    if img.isNull():
+        return 0, 0
+    img = img.scaled(int(w), int(h), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    if img.hasAlphaChannel():
+        img = img.convertToFormat(QImage.Format_RGB888)
+    p.fillRect(int(x), int(y), img.width(), img.height(), QColor("#ffffff"))
+    p.drawImage(int(x), int(y), img)
+    return img.width(), img.height()
 
 try:
     from qgis.PyQt.QtGui import QPdfWriter as _QPdfWriter
@@ -1195,15 +1212,16 @@ def _draw_artifact_catalogue(pg, win):
 
         img_w=0; img_h=0; img_x=0
         if has_img:
-            px=QPixmap(img_path)
-            if not px.isNull():
-                img_w=int(BW*0.34); img_h=int(img_w*0.95)
-                px=px.scaled(img_w,img_h,Qt.KeepAspectRatio,Qt.SmoothTransformation)
-                img_x=ML+BW-px.width()
-                pg.ensure_space(px.height()+8)
-                p.drawPixmap(img_x, pg.y, px.width(), px.height(), px)
-                p.setPen(QPen(pg.C_LINE,0.6)); p.drawRect(img_x, pg.y, px.width(), px.height())
-                img_w=px.width(); img_h=px.height()
+            slot_w=int(BW*0.34); slot_h=int(slot_w*0.95)
+            img_x=ML+BW-slot_w
+            pg.ensure_space(slot_h+8)
+            dw, dh = _draw_photo(p, img_path, img_x, pg.y, slot_w, slot_h)
+            if dw:
+                p.setPen(QPen(pg.C_LINE,0.6)); p.setBrush(Qt.NoBrush)
+                p.drawRect(img_x, pg.y, dw, dh)
+                img_w=slot_w; img_h=dh
+            else:
+                has_img=False
         else:
             # empty image slot
             img_w=int(BW*0.34); img_h=int(img_w*0.8); img_x=ML+BW-img_w

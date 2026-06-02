@@ -2011,7 +2011,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         new_btn = QPushButton("+ New crate"); new_btn.setObjectName("btn_primary"); new_btn.clicked.connect(self._add_crate)
         edit_btn = QPushButton("Edit"); edit_btn.setObjectName("btn_secondary"); edit_btn.clicked.connect(self._edit_crate)
         del_btn = QPushButton("Delete"); del_btn.setObjectName("btn_danger"); del_btn.clicked.connect(self._delete_crate)
-        mk_btn = QPushButton("Create crates layer"); mk_btn.setObjectName("btn_ghost"); mk_btn.clicked.connect(lambda: (self._create_simple_layer("crates"), self._reload_crates()))
+        mk_btn = QPushButton("Create crates layer"); mk_btn.setObjectName("btn_ghost"); mk_btn.clicked.connect(self._create_crates_layer)
         rf_btn = QPushButton("Refresh"); rf_btn.setObjectName("btn_secondary"); rf_btn.clicked.connect(self._reload_crates)
         for b in (new_btn, edit_btn, del_btn, mk_btn, rf_btn): b.setCursor(Qt.PointingHandCursor); bar.addWidget(b)
         vl.addLayout(bar)
@@ -2070,12 +2070,20 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         lyr = self._lyr(getattr(self, "crate_layer_cb", None))
         if not lyr:
             ph = QLabel("No crates layer — click 'Create crates layer' or set it in Layer Configuration.")
-            ph.setObjectName("muted"); self._crate_tiles_layout.addWidget(ph); return
+            ph.setObjectName("muted"); ph.setWordWrap(True)
+            self._crate_tiles_layout.addWidget(ph); return
+        if lyr.fields().indexOf("crate_label") < 0:
+            ph = QLabel("The selected layer isn't a crates layer (it has no 'crate_label' "
+                        "field). Click 'Create crates layer', or pick the right layer in "
+                        "Layer Configuration → Crates.")
+            ph.setObjectName("muted"); ph.setWordWrap(True)
+            self._crate_tiles_layout.addWidget(ph); return
         counts = self._crate_counts()
+        has_loc = lyr.fields().indexOf("location") >= 0
         n = 0
         for feat in lyr.getFeatures():
             label = fmt_cell(feat.attribute("crate_label")) or f"Crate {feat.id()}"
-            loc = fmt_cell(feat.attribute("location"))
+            loc = fmt_cell(feat.attribute("location")) if has_loc else ""
             tile = QPushButton(f"\U0001F4E6  {label}\n{loc or '—'}\n{counts.get(label, 0)} finds")
             tile.setCheckable(True); tile.setCursor(Qt.PointingHandCursor)
             tile.setObjectName("crateTile"); tile.setFixedSize(150, 96)
@@ -4122,10 +4130,11 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                 f"Error loading site:\n{str(_e)}\n\nIf switching sites, reload QGIS layers first.")
 
 
-    def _create_simple_layer(self, table_name):
-        """Generic: add a known table to an existing GeoPackage."""
-        path,_=QFileDialog.getOpenFileName(self,"Select GeoPackage","","GeoPackage (*.gpkg)")
-        if not path: return
+    def _create_simple_layer(self, table_name, path=None):
+        """Generic: add a known table to a GeoPackage (prompts if path not given)."""
+        if not path:
+            path,_=QFileDialog.getOpenFileName(self,"Select GeoPackage","","GeoPackage (*.gpkg)")
+        if not path: return None
         schema=SCHEMAS.get(table_name,[])
         if not schema: QMessageBox.warning(self,"",f"No schema for '{table_name}'"); return
         fields=QgsFields()
@@ -4143,8 +4152,18 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         if lyr.isValid():
             QgsProject.instance().addMapLayer(lyr); self._refresh_combos()
             self._msg(f"'{table_name}' layer created")
-        else:
-            QMessageBox.warning(self,"","Failed to create layer.")
+            return lyr
+        QMessageBox.warning(self,"","Failed to create layer.")
+        return None
+
+    def _create_crates_layer(self):
+        """Create a crates layer (in the connected GeoPackage) and select it."""
+        lyr = self._create_simple_layer("crates", path=self._current_gpkg_path())
+        if lyr is not None and hasattr(self, "crate_layer_cb"):
+            for i in range(self.crate_layer_cb.count()):
+                if self.crate_layer_cb.itemData(i) == lyr.id():
+                    self.crate_layer_cb.setCurrentIndex(i); break
+        self._reload_crates()
 
     def _refresh_combos(self):
         try:

@@ -245,6 +245,64 @@ def test_no_undefined_names():
 check("static: no undefined names (scope-aware)", test_no_undefined_names)
 
 
+def test_intra_package_imports():
+    """Every `from .module import name` (even inside a function) must resolve to
+    a real top-level name in that module.
+
+    Catches deferred-import regressions like `from .dock import compute_layout`
+    after compute_layout was moved out of dock.py — which import-smoke can't see
+    because the import only runs when the function is called.
+    """
+    import ast
+    pkg = os.path.join(PKG_PARENT, "arch_manager_v2")
+    files = {f[:-3]: os.path.join(pkg, f)
+             for f in os.listdir(pkg) if f.endswith(".py")}
+
+    def top_names(tree):
+        names = set()
+
+        def descend(node):
+            for ch in ast.iter_child_nodes(node):
+                yield ch
+                if not isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    yield from descend(ch)
+
+        nodes = []
+        for stmt in tree.body:
+            nodes.append(stmt)
+            if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                nodes.extend(descend(stmt))
+        for n in nodes:
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(n.name)
+            elif isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                names.add(n.id)
+            elif isinstance(n, ast.Import):
+                for a in n.names:
+                    names.add((a.asname or a.name).split(".")[0])
+            elif isinstance(n, ast.ImportFrom):
+                for a in n.names:
+                    if a.name != "*":
+                        names.add(a.asname or a.name)
+        return names
+
+    trees = {m: ast.parse(open(p, encoding="utf-8").read()) for m, p in files.items()}
+    exports = {m: top_names(t) for m, t in trees.items()}
+    problems = []
+    for mod, tree in trees.items():
+        for n in ast.walk(tree):
+            if isinstance(n, ast.ImportFrom) and n.level == 1 and n.module in exports:
+                for a in n.names:
+                    if a.name == "*":
+                        continue
+                    if a.name not in exports[n.module] and a.name not in files:
+                        problems.append(
+                            f"{mod}.py:{n.lineno}: 'from .{n.module} import "
+                            f"{a.name}' but {n.module}.py defines no '{a.name}'")
+    assert not problems, "broken intra-package imports:\n  " + "\n  ".join(problems)
+check("static: intra-package imports resolve", test_intra_package_imports)
+
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 _passed = sum(1 for _, ok, _ in _RESULTS if ok)
 _failed = [(n, tb) for n, ok, tb in _RESULTS if not ok]

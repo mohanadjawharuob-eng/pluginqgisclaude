@@ -734,7 +734,7 @@ class Page:
 
 # ── Harris Matrix — classic B&W portrait renderer ───────────────────────────
 def _draw_harris_pdf(pg, win, n_pages, hide_isolated=False):
-    from .dock import compute_layout
+    from .harris_view import compute_layout
     contexts = list(win.ctx_data.values())
     all_rels  = win.relationships + getattr(win,'layer_rels',[])
     if hide_isolated:

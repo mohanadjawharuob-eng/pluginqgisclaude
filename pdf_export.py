@@ -1162,91 +1162,138 @@ def _draw_cover(pg, p, opts, logo_px, sec_order, sections):
         pg_n += (3 if sec_k=='harris' else 2)
 
 
+def _artifact_photo_map(win):
+    """Map (context, object) -> [photo paths] from gallery captions like
+    'Artifact 244.005 (1)' so each artifact's photos can sit with its details."""
+    import re as _re
+    reg = getattr(win, "_photo_registry", {}) or {}
+    out = {}
+    for cat in ("photos", "drawings", "refs"):
+        for ph in (reg.get(cat, []) or []):
+            path = ph.get("path", "")
+            if not path or not os.path.exists(path):
+                continue
+            m = _re.search(r"(\\d+)\\.(\\d+)", str(ph.get("caption", "")))
+            if not m:
+                continue
+            out.setdefault((int(m.group(1)), int(m.group(2))), []).append(path)
+    return out
+
+
 def _draw_artifact_catalogue(pg, win):
-    artdet_lyr = win._lyr(win.artdet_layer_cb) if hasattr(win,'artdet_layer_cb') else None
-    art_lyr    = win._lyr(win.art_layer_cb)
-    if not (artdet_lyr and artdet_lyr.featureCount()>0):
-        return  # skip silently — no empty section
+    artdet_lyr = win._lyr(win.artdet_layer_cb) if hasattr(win, "artdet_layer_cb") else None
+    art_lyr = win._lyr(win.art_layer_cb)
+    if not (artdet_lyr and artdet_lyr.featureCount() > 0):
+        return
     pg.section_title_page("Artifact Catalogue", f"{artdet_lyr.featureCount()} detailed records")
     pg.new_page(); pg.heading1("Artifact Catalogue", "Detailed records with photography")
 
-    art_info={}
+    art_info = {}
     if art_lyr:
-        afns=[f.name() for f in art_lyr.fields()]
-        id_fn=next((f for f in ['id','fid','artifact_id'] if f in afns), afns[0] if afns else None)
-        type_fn=next((f for f in ['type','material'] if f in afns), None)
-        ctx_fn=next((f for f in ['context_num','ctx_num'] if f in afns), None)
+        afns = [f.name() for f in art_lyr.fields()]
+        id_fn = next((f for f in ["id", "fid", "artifact_id"] if f in afns), afns[0] if afns else None)
+        type_fn = next((f for f in ["type", "material"] if f in afns), None)
+        ctx_fn = next((f for f in ["context_num", "ctx_num"] if f in afns), None)
         for feat in art_lyr.getFeatures():
             try:
-                aid=_clean_val(feat.attribute(id_fn))
-                art_info[aid]={'type':_clean_val(feat.attribute(type_fn)) if type_fn else '',
-                               'context':_clean_val(feat.attribute(ctx_fn)) if ctx_fn else ''}
-            except Exception: pass
+                aid = _clean_val(feat.attribute(id_fn))
+                art_info[aid] = {"type": _clean_val(feat.attribute(type_fn)) if type_fn else "",
+                                 "context": _clean_val(feat.attribute(ctx_fn)) if ctx_fn else ""}
+            except Exception:
+                pass
 
-    field_pairs=[('detailed_description','Description'),('condition','Condition'),
-                 ('material_detail','Material'),('dimensions','Dimensions'),
-                 ('provenance','Provenance'),('parallels','Parallels / comparanda'),
-                 ('notes','Notes')]
-    fnames=[f.name() for f in artdet_lyr.fields()]
+    pmap = _artifact_photo_map(win)
+    field_pairs = [("detailed_description", "Description"), ("condition", "Condition"),
+                   ("material_detail", "Material"), ("dimensions", "Dimensions"),
+                   ("provenance", "Provenance"), ("parallels", "Parallels / comparanda"),
+                   ("notes", "Notes")]
+    fnames = [f.name() for f in artdet_lyr.fields()]
+    p = pg.p; ML = pg.ML; BW = pg.BW
+
     for feat in artdet_lyr.getFeatures():
-        aid = _clean_val(feat.attribute('artifact_id')) if 'artifact_id' in fnames else ''
-        base=art_info.get(aid,{})
-        # collect non-empty fields
-        vals=[]
-        for fn,flabel in field_pairs:
-            if fn not in fnames: continue
-            v=_clean_val(feat.attribute(fn))
-            if v: vals.append((flabel,v))
-        img_path = _clean_val(feat.attribute('image_path')) if 'image_path' in fnames else ''
-        has_img = bool(img_path) and os.path.exists(img_path)
-        # skip totally-empty entries
-        if not vals and not has_img and not aid: continue
+        aid = _clean_val(feat.attribute("artifact_id")) if "artifact_id" in fnames else ""
+        base = art_info.get(aid, {})
+        ctx = _clean_val(feat.attribute("context_num")) if "context_num" in fnames else (base.get("context") or "")
+        obj = _clean_val(feat.attribute("find_num")) if "find_num" in fnames else ""
+        vals = []
+        for fn, flabel in field_pairs:
+            if fn in fnames:
+                v = _clean_val(feat.attribute(fn))
+                if v:
+                    vals.append((flabel, v))
+        photos = []
+        main_img = _clean_val(feat.attribute("image_path")) if "image_path" in fnames else ""
+        if main_img and os.path.exists(main_img):
+            photos.append(main_img)
+        try:
+            key = (int(float(ctx)), int(float(obj))) if ctx != "" and obj != "" else None
+        except Exception:
+            key = None
+        if key:
+            for pth in pmap.get(key, []):
+                if pth not in photos:
+                    photos.append(pth)
+        if not vals and not photos and not aid:
+            continue
 
-        p=pg.p; ML=pg.ML; BW=pg.BW
-        pg.ensure_space(70)
-        card_y=pg.y
-        # header bar
-        p.setBrush(QBrush(pg.C_HEAD)); p.setPen(Qt.NoPen); p.drawRect(ML,card_y,BW,17)
-        p.setFont(_mk_font("Helvetica",max(1,int(9*pg.fs)),bold=True)); p.setPen(QColor("#ffffff"))
-        label = f"Artifact {aid}" if aid else "Artifact"
-        if base.get('type'): label+=f"   —   {base['type']}"
-        if base.get('context'): label+=f"   |   Context {base['context']}"
-        p.drawText(ML+6, card_y+12, label)
-        pg.y += 22
-
-        img_w=0; img_h=0; img_x=0
-        if has_img:
-            slot_w=int(BW*0.34); slot_h=int(slot_w*0.95)
-            img_x=ML+BW-slot_w
-            pg.ensure_space(slot_h+8)
-            dw, dh = _draw_photo(p, img_path, img_x, pg.y, slot_w, slot_h)
+        slot_w = int(BW * 0.34); slot_h = int(slot_w * 0.95)
+        text_w = BW - slot_w - 14
+        p.setFont(_mk_font("Helvetica", max(1, int(7.2 * pg.fs))))
+        fm = p.fontMetrics()
+        rows = []; text_h = 0
+        for flabel, val in vals:
+            br = fm.boundingRect(0, 0, int(text_w) - 94, 9999, Qt.TextWordWrap, val)
+            rh = max(13, br.height() + 5); rows.append((flabel, val, rh)); text_h += rh
+        extra = photos[1:5]
+        thumb_h = 0
+        if extra:
+            thumb_w = (slot_w - 3 * 4) / 4.0
+            thumb_h = int(thumb_w * 0.85) + 4
+        photo_h = (slot_h + thumb_h) if photos else int(slot_w * 0.6)
+        card_h = 22 + max(text_h, photo_h) + 14
+        pg.ensure_space(card_h)
+        card_y = pg.y
+        p.setBrush(QBrush(pg.C_HEAD)); p.setPen(Qt.NoPen); p.drawRect(ML, card_y, BW, 17)
+        p.setFont(_mk_font("Helvetica", max(1, int(9 * pg.fs)), bold=True)); p.setPen(QColor("#ffffff"))
+        try:
+            full = f"{int(float(ctx))}.{int(float(obj)):03d}" if (ctx != "" and obj != "") else (aid or "")
+        except Exception:
+            full = aid or ""
+        label = f"Artifact {full}" if full else "Artifact"
+        if base.get("type"):
+            label += "   \u2014   " + str(base.get("type", ""))
+        if ctx != "":
+            label += f"   |   Context {ctx}"
+        p.drawText(ML + 6, card_y + 12, label)
+        body_y = card_y + 22
+        img_x = ML + BW - slot_w
+        if photos:
+            dw, dh = _draw_photo(p, photos[0], img_x, body_y, slot_w, slot_h)
             if dw:
-                p.setPen(QPen(pg.C_LINE,0.6)); p.setBrush(Qt.NoBrush)
-                p.drawRect(img_x, pg.y, dw, dh)
-                img_w=slot_w; img_h=dh
-            else:
-                has_img=False
+                p.setPen(QPen(pg.C_LINE, 0.6)); p.setBrush(Qt.NoBrush); p.drawRect(img_x, body_y, dw, dh)
+            if extra:
+                thumb_w = (slot_w - 3 * 4) / 4.0
+                ty = body_y + slot_h + 4
+                for i, ep in enumerate(extra):
+                    tx = img_x + i * (thumb_w + 4)
+                    tdw, tdh = _draw_photo(p, ep, tx, ty, int(thumb_w), int(thumb_w * 0.85))
+                    if tdw:
+                        p.setPen(QPen(pg.C_LINE, 0.4)); p.setBrush(Qt.NoBrush)
+                        p.drawRect(int(tx), int(ty), tdw, tdh)
         else:
-            # empty image slot
-            img_w=int(BW*0.34); img_h=int(img_w*0.8); img_x=ML+BW-img_w
-            p.setBrush(Qt.NoBrush); p.setPen(QPen(pg.C_LINE,0.7,Qt.DashLine))
-            p.drawRect(img_x, pg.y, img_w, img_h)
-            p.setFont(_mk_font("Helvetica",max(1,int(6*pg.fs)),italic=True)); p.setPen(pg.C_MUTE)
-            p.drawText(QRectF(img_x,pg.y+img_h//2-5,img_w,12),Qt.AlignCenter,"[ attach photo ]")
-
-        text_w = BW - img_w - 12
-        txt_y=pg.y
-        for flabel,val in vals:
-            p.setFont(_mk_font("Helvetica",max(1,int(6.6*pg.fs)),bold=True)); p.setPen(pg.C_ACC)
-            p.drawText(ML+2, txt_y+9, flabel+":")
-            p.setFont(_mk_font("Helvetica",max(1,int(7.2*pg.fs)))); p.setPen(pg.C_TEXT)
-            fm2=p.fontMetrics()
-            br=fm2.boundingRect(0,0,int(text_w)-94,9999,Qt.TextWordWrap,val)
-            p.drawText(QRectF(ML+92,txt_y,text_w-94,br.height()+4),Qt.TextWordWrap,val)
-            txt_y+=max(13,br.height()+5)
-            if txt_y > pg.H-pg.MB-24: break
-        pg.y=max(txt_y, pg.y+img_h)+12
-        p.setPen(QPen(pg.C_LINE,0.5)); p.drawLine(ML,pg.y-5,ML+BW,pg.y-5)
+            ih = int(slot_w * 0.6)
+            p.setBrush(Qt.NoBrush); p.setPen(QPen(pg.C_LINE, 0.7, Qt.DashLine)); p.drawRect(img_x, body_y, slot_w, ih)
+            p.setFont(_mk_font("Helvetica", max(1, int(6 * pg.fs)), italic=True)); p.setPen(pg.C_MUTE)
+            p.drawText(QRectF(img_x, body_y + ih // 2 - 5, slot_w, 12), Qt.AlignCenter, "[ no photo ]")
+        ty = body_y
+        for flabel, val, rh in rows:
+            p.setFont(_mk_font("Helvetica", max(1, int(6.6 * pg.fs)), bold=True)); p.setPen(pg.C_ACC)
+            p.drawText(ML + 2, ty + 9, flabel + ":")
+            p.setFont(_mk_font("Helvetica", max(1, int(7.2 * pg.fs)))); p.setPen(pg.C_TEXT)
+            p.drawText(QRectF(ML + 92, ty, text_w - 94, rh), Qt.TextWordWrap, val)
+            ty += rh
+        pg.y = card_y + card_h
+        p.setPen(QPen(pg.C_LINE, 0.5)); p.drawLine(ML, pg.y - 6, ML + BW, pg.y - 6)
 
 
 def _draw_strat_matrix(pg, win, opts):

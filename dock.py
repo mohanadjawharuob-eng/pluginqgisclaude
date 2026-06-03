@@ -1161,7 +1161,11 @@ class _ArchaeologistMixin:
 
         self.arch_status = QLabel(""); self.arch_status.setObjectName("statusMsg")
         bv.addWidget(self.arch_status)
-        vl.addWidget(body)
+        # Keep the setup panel scrollable so it never gets squeezed off-screen
+        _bsc = QScrollArea(); _bsc.setWidgetResizable(True); _bsc.setWidget(body)
+        _bsc.setStyleSheet("QScrollArea{border:none;background:transparent;}")
+        _bsc.setMaximumHeight(300)
+        vl.addWidget(_bsc)
 
         # Results sub-tabs
         self.arch_tabs = QTabWidget(); self.arch_tabs.setObjectName("subTabs")
@@ -3771,7 +3775,10 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                         "they are copied into the project and matched to artifacts by "
                         "context.object number")
         _imp.clicked.connect(self._import_match_photos)
-        _tb.addStretch(); _tb.addWidget(_imp)
+        _col = QPushButton("＋ Column"); _col.setObjectName("btn_ghost"); _col.setCursor(Qt.PointingHandCursor)
+        _col.setToolTip("Add a new field to the Artifact Details layer (saved into the GeoPackage)")
+        _col.clicked.connect(lambda: self._add_field(self._lyr(self.artdet_layer_cb)))
+        _tb.addStretch(); _tb.addWidget(_col); _tb.addWidget(_imp)
         outer_vl.addLayout(_tb)
         body = QWidget(); body.setStyleSheet("background:transparent;")
         main = QHBoxLayout(body); main.setContentsMargins(16, 8, 16, 16); main.setSpacing(12)

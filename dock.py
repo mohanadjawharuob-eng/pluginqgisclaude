@@ -2,7 +2,7 @@
 Archaeological Manager dock.py v5
 Refactored: logic split into data_manager.py, styles.py, widgets.py, harris_view.py
 """
-import json, csv, zipfile, os, re
+import json, csv, zipfile, os, re, sys
 import shutil, datetime
 import xml.etree.ElementTree as ET
 from functools import partial
@@ -61,7 +61,8 @@ from .data_manager import (SCHEMAS, TABLE_NAMES, coerce, vlayers as dm_vlayers,
                             lyr_from_cb, schema_for, write_feature, delete_features,
                             create_project as dm_create_project, open_gpkg as dm_open_gpkg,
                             detect_sites, find_layer, safe_int, user_data_path,
-                            user_data_dir, fmt_cell)
+                            user_data_dir, fmt_cell, library_dir, set_library_dir,
+                            site_dir, list_sites_in_library)
 from .recording_sheets import RecordingSheetsTab
 from .harris_view import HarrisView
 
@@ -2041,6 +2042,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         self._site_badge = StatusBadge()
         site_card.body_layout.addWidget(self._site_badge)
         outer.addWidget(site_card)
+        outer.addWidget(self._build_library_card())
 
         # ── Stat cards ──
         stats_row = QHBoxLayout(); stats_row.setSpacing(16)
@@ -2332,6 +2334,56 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                     lyr.startEditing(); lyr.changeAttributeValue(fid, idx, None); lyr.commitChanges()
         if getattr(self, "_current_crate", None):
             self._load_crate_contents(self._current_crate[0]); self._reload_crates()
+
+    def _build_library_card(self):
+        """Site Library card: shows the library root, lets you change it, and
+        lists the per-site folders (data / photos / exports / backups)."""
+        card = Card("Site Library", "All excavation sites organised in one place")
+        row = QHBoxLayout(); row.setSpacing(8)
+        self._lib_path_lbl = QLabel(library_dir()); self._lib_path_lbl.setObjectName("muted")
+        self._lib_path_lbl.setWordWrap(True)
+        row.addWidget(self._lib_path_lbl, 1)
+        chg = QPushButton("Change folder…"); chg.setObjectName("btn_secondary")
+        chg.setCursor(Qt.PointingHandCursor); chg.clicked.connect(self._change_library_dir)
+        openb = QPushButton("Open"); openb.setObjectName("btn_ghost")
+        openb.setCursor(Qt.PointingHandCursor); openb.clicked.connect(lambda: self._open_folder(library_dir()))
+        row.addWidget(chg); row.addWidget(openb)
+        card.body_layout.addLayout(row)
+        self._lib_list = QListWidget(); self._lib_list.setMaximumHeight(150)
+        self._lib_list.itemDoubleClicked.connect(
+            lambda it: self._open_folder(it.data(Qt.UserRole)))
+        card.body_layout.addWidget(self._lib_list)
+        hint = QLabel("Double-click a site to open its folder. New projects, imported photos "
+                      "and exports are filed under each site automatically.")
+        hint.setObjectName("mutedXs"); hint.setWordWrap(True)
+        card.body_layout.addWidget(hint)
+        self._refresh_library_list()
+        return card
+
+    def _refresh_library_list(self):
+        if not hasattr(self, "_lib_list"): return
+        self._lib_list.clear()
+        for name, path in list_sites_in_library():
+            it = QListWidgetItem(f"📁  {name}")
+            it.setData(Qt.UserRole, path); self._lib_list.addItem(it)
+        if hasattr(self, "_lib_path_lbl"):
+            self._lib_path_lbl.setText(library_dir())
+
+    def _change_library_dir(self):
+        d = QFileDialog.getExistingDirectory(self, "Choose the site library folder", library_dir())
+        if not d: return
+        set_library_dir(d); self._refresh_library_list()
+        self._msg(f"Library folder set: {d}")
+
+    def _open_folder(self, path):
+        import subprocess
+        try:
+            if not path or not os.path.isdir(path): os.makedirs(path, exist_ok=True)
+            if os.name == "nt": os.startfile(path)  # noqa
+            elif sys.platform == "darwin": subprocess.Popen(["open", path])
+            else: subprocess.Popen(["xdg-open", path])
+        except Exception as e:
+            self._msg(f"Couldn't open folder: {e}", error=True)
 
     def _build_media_tab(self):
         """Photo/Media gallery with categories."""
@@ -3691,7 +3743,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             self._ensure_field(det_lyr, nm, qt)
         gpkg = self._current_gpkg_path()
         base = os.path.dirname(gpkg) if gpkg else user_data_dir()
-        dest = os.path.join(base, "ArchManager_media", "artifacts")
+        dest = site_dir(getattr(self, "_current_site", "") or "site", "photos", "artifacts")
         try: os.makedirs(dest, exist_ok=True)
         except Exception: pass
 
@@ -4288,6 +4340,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         if not ok2: return
         self._current_site=site.strip() or 'SITE'
         default=self._current_site.replace(' ','_').lower()+'.gpkg'
+        default=os.path.join(site_dir(self._current_site,'data'), default)
         path,_=QFileDialog.getSaveFileName(self,'Create GeoPackage',default,'GeoPackage (*.gpkg)')
         if not path: return
         if not path.endswith('.gpkg'): path+='.gpkg'
@@ -5263,7 +5316,8 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
 
     def _export_excel(self):
         """Export every connected table to one .xlsx (one sheet per table)."""
-        default = (getattr(self, '_current_site', '') or 'arch_data') + ".xlsx"
+        _site = getattr(self, '_current_site', '') or 'arch_data'
+        default = os.path.join(site_dir(_site, "exports"), _site + ".xlsx")
         path, _ = QFileDialog.getSaveFileName(self, "Export to Excel", default, "Excel (*.xlsx)")
         if not path: return
         if not path.lower().endswith('.xlsx'): path += '.xlsx'
@@ -5306,7 +5360,9 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             except Exception: pass
         if dlg.exec_()!=QDialog.Accepted: return
         opts=dlg.get_options()
-        path,_=QFileDialog.getSaveFileName(self,"Save PDF Report","report.pdf","PDF (*.pdf)")
+        _site=getattr(self,'_current_site','') or 'report'
+        _pdf_def=os.path.join(site_dir(_site,"exports"), _site+"_report.pdf")
+        path,_=QFileDialog.getSaveFileName(self,"Save PDF Report",_pdf_def,"PDF (*.pdf)")
         if not path: return
         if not path.endswith('.pdf'): path+='.pdf'
         self._msg("Exporting PDF…")

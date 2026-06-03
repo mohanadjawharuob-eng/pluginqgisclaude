@@ -159,6 +159,52 @@ def coerce(val, qtype):
     return str(val)
 
 
+def library_dir():
+    """Root folder that organises all excavation sites. User-settable via
+    QgsSettings; defaults to <AppData>/ArchManager/Sites."""
+    root = ""
+    try:
+        from qgis.core import QgsSettings
+        root = QgsSettings().value("ArchManager/library_dir", "", type=str)
+    except Exception:
+        root = ""
+    if not root or not isinstance(root, str):
+        root = os.path.join(user_data_dir(), "Sites")
+    try: os.makedirs(root, exist_ok=True)
+    except Exception: pass
+    return root
+
+
+def set_library_dir(path):
+    try:
+        from qgis.core import QgsSettings
+        QgsSettings().setValue("ArchManager/library_dir", str(path))
+    except Exception:
+        pass
+
+
+def site_dir(site, *subs):
+    """Folder for one site inside the library (created), optionally a sub-folder
+    such as 'data', 'photos', 'exports', 'backups'."""
+    safe = re.sub(r'[\\/?*:"<>|]', '_', str(site or 'site')).strip() or 'site'
+    d = os.path.join(library_dir(), safe, *[str(s) for s in subs])
+    try: os.makedirs(d, exist_ok=True)
+    except Exception: pass
+    return d
+
+
+def list_sites_in_library():
+    """Return [(site_name, path)] for each site folder in the library."""
+    root = library_dir(); out = []
+    try:
+        for n in sorted(os.listdir(root)):
+            p = os.path.join(root, n)
+            if os.path.isdir(p): out.append((n, p))
+    except Exception:
+        pass
+    return out
+
+
 def fmt_cell(v):
     """Display string for a table cell — QGIS NULL / None / 'NULL' become ''.
 

@@ -235,6 +235,9 @@ class ReportDesignerDialog(QDialog):
         right_w = QWidget(); right_vl = QVBoxLayout(right_w); right_vl.setContentsMargins(0,0,0,0)
         prev_grp = QGroupBox("Page order preview")
         prev_vl = QVBoxLayout(prev_grp)
+        self._color_preview = QLabel(); self._color_preview.setFixedHeight(126)
+        self._color_preview.setAlignment(Qt.AlignCenter)
+        prev_vl.addWidget(self._color_preview)
         self._preview_text = QTextEdit(); self._preview_text.setReadOnly(True)
         self._preview_text.setStyleSheet("font-family: monospace; font-size: 10px;")
         prev_vl.addWidget(self._preview_text)
@@ -297,8 +300,10 @@ class ReportDesignerDialog(QDialog):
         for k, lbl in [("color_header","Header / band"),("color_accent","Accent / rules"),
                         ("color_text","Body text"),("color_row_a","Table row A"),("color_row_b","Table row B")]:
             le = QLineEdit(DEFAULT[k]); self._cfs[k] = le; t4l.addRow(lbl+":", le)
+            le.textChanged.connect(self._render_color_preview)
         t4l.addRow(QLabel("<small>Use #rrggbb hex values</small>"))
         tabs.addTab(t4, "Colours")
+        self._render_color_preview()
 
         vl.addWidget(tabs)
         bb = QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel)
@@ -342,6 +347,39 @@ class ReportDesignerDialog(QDialog):
     def _apply_scheme(self, name):
         for k, le in self._cfs.items():
             if k in COLOR_SCHEMES.get(name,{}): le.setText(COLOR_SCHEMES[name][k])
+        self._render_color_preview()
+
+    def _render_color_preview(self, *args):
+        """Live swatch of the chosen palette: header band, accent rule, body
+        text and alternating table rows — so the look is visible before export."""
+        if not hasattr(self, '_color_preview') or not hasattr(self, '_cfs'):
+            return
+        def g(k, d):
+            try:
+                t = self._cfs[k].text().strip()
+                return t if (t.startswith('#') and len(t) in (4, 7)) else d
+            except Exception:
+                return d
+        W, H = 270, 118
+        px = QPixmap(W, H); px.fill(QColor("#ffffff"))
+        p = QPainter(px)
+        p.fillRect(0, 0, W, 24, QColor(g("color_header", "#2b2b2b")))
+        p.setPen(QColor("#ffffff")); p.setFont(_mk_font("Helvetica", 8, bold=True))
+        p.drawText(8, 16, "ARCHAEOLOGICAL SITE REPORT")
+        p.fillRect(8, 30, W - 16, 3, QColor(g("color_accent", "#9a7b3f")))
+        p.setPen(QColor(g("color_text", "#1d1d1d"))); p.setFont(_mk_font("Helvetica", 9, bold=True))
+        p.drawText(8, 48, "Context Inventory")
+        ra = QColor(g("color_row_a", "#ffffff")); rb = QColor(g("color_row_b", "#f3efe7"))
+        p.setFont(_mk_font("Helvetica", 7))
+        for i in range(4):
+            ry = 54 + i * 14
+            p.fillRect(8, ry, W - 16, 14, ra if i % 2 == 0 else rb)
+            p.setPen(QColor(g("color_text", "#1d1d1d")))
+            p.drawText(12, ry + 10, f"Context {100 + i}        Fill        Roman")
+        p.setPen(QPen(QColor(g("color_accent", "#9a7b3f")), 1)); p.setBrush(Qt.NoBrush)
+        p.drawRect(0, 0, W - 1, H - 1)
+        p.end()
+        self._color_preview.setPixmap(px)
 
     def get_options(self):
         order = []; sections = {}

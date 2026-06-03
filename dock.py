@@ -290,9 +290,21 @@ def write_xlsx(path, sheets):
             z.writestr(f'xl/worksheets/sheet{i}.xml', part)
 
 # ── Dialogs ───────────────────────────────────────────────────────────────────
+def _theme_dialog(dlg, parent):
+    """Apply the active light/dark theme to a modal dialog so its text and
+    background always have correct contrast (modal dialogs don't inherit the
+    main window's stylesheet)."""
+    _c = getattr(parent, "_current_theme", None) or LIGHT_CLR
+    try:
+        dlg.setStyleSheet(build_all_qss(_c) + f"QDialog{{background:{_c['bg_root']};}}")
+    except Exception:
+        pass
+
+
 class RecordDialog(QDialog):
     def __init__(self,fields_list,defaults=None,title="Record",parent=None,extra_options=None):
         super().__init__(parent); self.setWindowTitle(title); self.setMinimumWidth(420)
+        _theme_dialog(self, parent)
         self._w={}; fl=QFormLayout(self); defaults=defaults or {}; extra_options=extra_options or {}
         for name,qtype in fields_list:
             val=str(defaults.get(name,'') or '')
@@ -317,6 +329,7 @@ class RecordDialog(QDialog):
 class AddFieldDialog(QDialog):
     def __init__(self,parent=None):
         super().__init__(parent); self.setWindowTitle("Add Column"); self.setMinimumWidth(300)
+        _theme_dialog(self, parent)
         fl=QFormLayout(self)
         self.name_input=QLineEdit(); self.name_input.setPlaceholderText("e.g. material, count")
         self.type_cb=QComboBox(); self.type_cb.addItems(["Text","Integer","Decimal"])
@@ -331,6 +344,7 @@ class AddFieldDialog(QDialog):
 class ImportDialog(QDialog):
     def __init__(self,sheets,target_layers,parent=None):
         super().__init__(parent); self.setWindowTitle("Import Data"); self.setMinimumSize(620,420)
+        _theme_dialog(self, parent)
         self.sheets=sheets; self._combos=[]
         vl=QVBoxLayout(self)
         r1=QHBoxLayout(); r1.addWidget(QLabel("Sheet:")); self.sheet_cb=QComboBox()

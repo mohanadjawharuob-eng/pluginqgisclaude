@@ -202,6 +202,93 @@ def read_xlsx(path):
             sheets[name]=(rows[0],rows[1:])
     return sheets
 
+
+def write_xlsx(path, sheets):
+    """Write sheets to a minimal .xlsx with no third-party deps.
+
+    `sheets` is a list of (name, headers, rows); rows is a list of lists.
+    Uses inline strings (widely supported) so there is no sharedStrings table.
+    """
+    import zipfile, re as _re
+
+    def esc(v):
+        s = "" if v is None else str(v)
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    def colref(ci):
+        s = ""; ci += 1
+        while ci:
+            ci, r = divmod(ci - 1, 26); s = chr(65 + r) + s
+        return s
+
+    used = set()
+    def safe_name(n):
+        n = _re.sub(r'[\\/?*\[\]:]', '_', str(n))[:31] or "Sheet"
+        base = n; i = 2
+        while n in used:
+            n = f"{base[:28]}_{i}"; i += 1
+        used.add(n); return n
+
+    norm = [(safe_name(n), h, r) for (n, h, r) in sheets] or [("Sheet1", [], [])]
+    # shared string table (deduplicated) — read by Excel and our own read_xlsx
+    sst = []; sidx = {}
+    def s_id(v):
+        s = "" if v is None else str(v)
+        if s not in sidx:
+            sidx[s] = len(sst); sst.append(s)
+        return sidx[s]
+
+    ct = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+          '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+          '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
+          '<Default Extension="xml" ContentType="application/xml"/>',
+          '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
+          '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>']
+    wb_sheets = []; wb_rels = []; ws_parts = []
+    for i, (name, headers, rows) in enumerate(norm, start=1):
+        ct.append(f'<Override PartName="/xl/worksheets/sheet{i}.xml" '
+                  f'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>')
+        wb_sheets.append(f'<sheet name="{esc(name)}" sheetId="{i}" r:id="rId{i}"/>')
+        wb_rels.append(f'<Relationship Id="rId{i}" '
+                       f'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+                       f'Target="worksheets/sheet{i}.xml"/>')
+        xml = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+               '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>']
+        for ri, row in enumerate(([headers] if headers else []) + list(rows), start=1):
+            cells = "".join(
+                f'<c r="{colref(ci)}{ri}" t="s"><v>{s_id(v)}</v></c>'
+                for ci, v in enumerate(row))
+            xml.append(f'<row r="{ri}">{cells}</row>')
+        xml.append('</sheetData></worksheet>')
+        ws_parts.append("".join(xml))
+    ss_rid = len(norm) + 1
+    wb_rels.append(f'<Relationship Id="rId{ss_rid}" '
+                   f'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" '
+                   f'Target="sharedStrings.xml"/>')
+    ct.append('</Types>')
+    shared = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+              f'<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{len(sst)}" uniqueCount="{len(sst)}">'
+              + "".join(f'<si><t xml:space="preserve">{esc(s)}</t></si>' for s in sst) + '</sst>')
+    rels_root = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                 '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                 '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+                 'Target="xl/workbook.xml"/></Relationships>')
+    workbook = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>'
+                + "".join(wb_sheets) + '</sheets></workbook>')
+    wbrels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+              '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+              + "".join(wb_rels) + '</Relationships>')
+    with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as z:
+        z.writestr('[Content_Types].xml', "".join(ct))
+        z.writestr('_rels/.rels', rels_root)
+        z.writestr('xl/workbook.xml', workbook)
+        z.writestr('xl/_rels/workbook.xml.rels', wbrels)
+        z.writestr('xl/sharedStrings.xml', shared)
+        for i, part in enumerate(ws_parts, start=1):
+            z.writestr(f'xl/worksheets/sheet{i}.xml', part)
+
 # ── Dialogs ───────────────────────────────────────────────────────────────────
 class RecordDialog(QDialog):
     def __init__(self,fields_list,defaults=None,title="Record",parent=None,extra_options=None):
@@ -1678,10 +1765,12 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         f_row = QHBoxLayout(); f_row.setSpacing(6)
         pdf_btn = QPushButton("📄  PDF"); pdf_btn.setObjectName("btn_purple")
         pdf_btn.setCursor(Qt.PointingHandCursor); pdf_btn.clicked.connect(self._export_pdf)
+        xls_btn = QPushButton("📊  Excel"); xls_btn.setObjectName("btn_secondary")
+        xls_btn.setCursor(Qt.PointingHandCursor); xls_btn.clicked.connect(self._export_excel)
         bak_btn = QPushButton("💾  Backup"); bak_btn.setObjectName("btn_secondary")
         bak_btn.setCursor(Qt.PointingHandCursor)
         if hasattr(self, '_backup_project'): bak_btn.clicked.connect(self._backup_project)
-        f_row.addWidget(pdf_btn); f_row.addWidget(bak_btn)
+        f_row.addWidget(pdf_btn); f_row.addWidget(xls_btn); f_row.addWidget(bak_btn)
         fh.addLayout(f_row)
         guide_btn = QPushButton("📖  Guide & Help")
         guide_btn.setObjectName("btn_ghost"); guide_btn.setCursor(Qt.PointingHandCursor)
@@ -5120,6 +5209,39 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             try: self._log_history('import_csv', os.path.basename(p), 0, f"{len(rows)-1} rows")
             except Exception: pass
         except Exception as e: QMessageBox.critical(self,"Error",str(e))
+
+    def _export_excel(self):
+        """Export every connected table to one .xlsx (one sheet per table)."""
+        default = (getattr(self, '_current_site', '') or 'arch_data') + ".xlsx"
+        path, _ = QFileDialog.getSaveFileName(self, "Export to Excel", default, "Excel (*.xlsx)")
+        if not path: return
+        if not path.lower().endswith('.xlsx'): path += '.xlsx'
+        table_cb = [
+            ('Contexts', self.ctx_layer_cb), ('Pottery', self.pot_layer_cb),
+            ('Artifacts', self.art_layer_cb), ('Crates', getattr(self, 'crate_layer_cb', None)),
+            ('Skeletons', self.ske_layer_cb), ('Bone Inventory', self.bone_layer_cb),
+            ('Artifact Details', self.artdet_layer_cb), ('Drawings', self.draw_layer_cb),
+            ('Relationships', self.ctx_rel_layer_cb), ('Grids', self.grid_layer_cb),
+            ('History', self.hist_layer_cb),
+        ]
+        sheets = []; n_rows = 0
+        for name, cb in table_cb:
+            lyr = self._lyr(cb) if cb is not None else None
+            if not lyr: continue
+            headers = [f.name() for f in lyr.fields()]
+            rows = [[fmt_cell(feat.attribute(h)) for h in headers] for feat in lyr.getFeatures()]
+            sheets.append((name, headers, rows)); n_rows += len(rows)
+        if not sheets:
+            QMessageBox.warning(self, "", "No connected layers to export. Connect a site first."); return
+        try:
+            write_xlsx(path, sheets)
+            self._msg(f"Excel exported: {os.path.basename(path)}")
+            QMessageBox.information(self, "Excel export",
+                f"Exported {len(sheets)} sheet(s) and {n_rows} row(s) to:\n{path}")
+            try: self._log_history('export_excel', os.path.basename(path), 0, getattr(self, '_current_site', ''))
+            except Exception: pass
+        except Exception as e:
+            QMessageBox.critical(self, "Excel export failed", str(e))
 
     def _export_pdf(self):
         from .pdf_export import ReportDesignerDialog, export_pdf

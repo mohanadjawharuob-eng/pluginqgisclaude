@@ -933,7 +933,7 @@ def export_pdf(output_path, opts, win):
         logo_px = _load_default_logo()
 
     if HAS_PDF_WRITER:
-        device = _QPdfWriter(output_path); device.setResolution(72)
+        device = _QPdfWriter(output_path); device.setResolution(300)
         pmap={"A4":QPagedPaintDevice.A4,"Letter":QPagedPaintDevice.Letter,"A3":QPagedPaintDevice.A3}
         device.setPageSize(pmap.get(opts.get("paper","A4"), QPagedPaintDevice.A4))
         try: device.setPageMargins(QMarginsF(0,0,0,0))
@@ -950,7 +950,11 @@ def export_pdf(output_path, opts, win):
 
     painter=QPainter()
     if not painter.begin(device): return False
-    if not HAS_PDF_WRITER and HAS_PRINTER:
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+    if HAS_PDF_WRITER:
+        _s = device.resolution()/72.0; painter.scale(_s, _s)
+    elif HAS_PRINTER:
         pr=device.pageRect(); painter.scale(pr.width()/595.0, pr.height()/842.0)
 
     pg=Page(painter, device, opts, logo_px)
@@ -1312,7 +1316,7 @@ def _draw_strat_matrix(pg, win, opts):
 # ── Per-context PDF export (single page, used by "Export context PDF") ────────
 def _export_context_page(output_path, ctx_num, win):
     if HAS_PDF_WRITER:
-        device=_QPdfWriter(output_path); device.setResolution(72)
+        device=_QPdfWriter(output_path); device.setResolution(300)
         device.setPageSize(QPagedPaintDevice.A4)
         try: device.setPageMargins(QMarginsF(0,0,0,0))
         except Exception: pass
@@ -1324,7 +1328,11 @@ def _export_context_page(output_path, ctx_num, win):
         return False
     painter=QPainter()
     if not painter.begin(device): return False
-    if not HAS_PDF_WRITER and HAS_PRINTER:
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+    if HAS_PDF_WRITER:
+        _s = device.resolution()/72.0; painter.scale(_s, _s)
+    elif HAS_PRINTER:
         pr=device.pageRect(); painter.scale(pr.width()/595.0,pr.height()/842.0)
 
     opts={"font_scale":1.0,"margin_lr":46,"margin_top":50,"margin_bot":46,

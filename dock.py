@@ -701,7 +701,7 @@ class _HistoryAndTabsMixin:
                 item.setToolTip(fpath + (f"\n📍 Context {context}" if context else ''))
                 px = QPixmap(fpath)
                 if not px.isNull():
-                    item.setIcon(QIcon(px.scaled(120, 90, _Qt.KeepAspectRatio, _Qt.SmoothTransformation)))
+                    item.setIcon(QIcon(px.scaled(160, 120, _Qt.KeepAspectRatio, _Qt.SmoothTransformation)))
                 else:
                     icon_lbl = "📄" if fpath.lower().endswith(('.pdf', '.docx', '.xlsx')) else "📐"
                     item.setText(f"{icon_lbl}\n{display}")
@@ -2367,7 +2367,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         gallery.setObjectName("gallery")
         gallery.setContextMenuPolicy(Qt.CustomContextMenu)
         gallery.setViewMode(QListWidget.IconMode)
-        gallery.setIconSize(_QSize(120, 90))
+        gallery.setIconSize(_QSize(160, 120))
         gallery.setResizeMode(QListWidget.Adjust)
         gallery.setSpacing(8)
         gallery.setProperty("_files", [])

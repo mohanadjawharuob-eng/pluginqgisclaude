@@ -16,6 +16,12 @@ CTX_COLORS = {
     'surface':'#a8d4c0','feature':'#c4a8d4','rubble':'#c8c8b8','other':'#d8d8d0',
 }
 
+def _blend(a, b, frac):
+    """Blend colour a toward b by frac (0..1)."""
+    return QColor(int(a.red()  +(b.red()  -a.red())  *frac),
+                  int(a.green()+(b.green()-a.green())*frac),
+                  int(a.blue() +(b.blue() -a.blue()) *frac))
+
 def compute_layout(contexts,relationships):
     ids=[c['num'] for c in contexts]
     if not ids: return {}
@@ -57,27 +63,42 @@ class ContextNode(QGraphicsObject):
         self.num,self.ctx,self._hi=num,ctx,False
         self.setPos(x,y); self.setCursor(Qt.PointingHandCursor)
         self.setToolTip(f"Context {num}\nType: {ctx.get('type','—')}\nPeriod: {ctx.get('period','—')}")
-    def boundingRect(self): return QRectF(0,0,BOX_W,BOX_H)
+    def boundingRect(self): return QRectF(-2,-2,BOX_W+4,BOX_H+6)
     def paint(self,painter,option,widget=None):
-        # Classic B&W style — white boxes, black borders, no color fill
+        # Modern card: rounded corners, soft shadow, a gentle type-tinted fill
+        # and a colour stripe on the left edge keyed to the context type.
         painter.setRenderHint(QPainter.Antialiasing)
-        fill   = QColor('#e8f0ff') if self._hi else QColor('#ffffff')
-        border = QColor('#1144cc') if self._hi else QColor('#111111')
-        pen_w  = 1.8 if self._hi else 0.8
-        painter.setBrush(QBrush(fill))
-        painter.setPen(QPen(border, pen_w))
-        painter.drawRect(0, 0, BOX_W, BOX_H)   # square corners like reference
-        # Context number (bold, centered top half)
-        painter.setPen(QPen(QColor('#000000')))
-        f1 = QFont('Arial', max(5, int(BOX_H * 0.32))); f1.setBold(True)
+        rad = 6; body = QRectF(0, 0, BOX_W, BOX_H)
+        typ = (self.ctx.get('type','') or '').strip().lower()
+        accent = QColor(CTX_COLORS.get(typ, CTX_COLORS['other']))
+        # drop shadow
+        painter.setPen(Qt.NoPen); painter.setBrush(QColor(0, 0, 0, 30))
+        painter.drawRoundedRect(body.translated(0.0, 1.6), rad, rad)
+        # body fill / border
+        if self._hi:
+            fill = QColor('#e9f1ff'); border = QColor('#1d4ed8'); pen_w = 2.0
+        else:
+            fill = _blend(QColor('#ffffff'), accent, 0.16)
+            border = QColor('#b9b1a2'); pen_w = 1.0
+        painter.setBrush(QBrush(fill)); painter.setPen(QPen(border, pen_w))
+        painter.drawRoundedRect(body, rad, rad)
+        # left type stripe (clipped to the rounded body)
+        painter.save()
+        clip = QPainterPath(); clip.addRoundedRect(body, rad, rad)
+        painter.setClipPath(clip); painter.setPen(Qt.NoPen)
+        painter.setBrush(accent if not self._hi else QColor('#1d4ed8'))
+        painter.drawRect(QRectF(0, 0, 4, BOX_H)); painter.restore()
+        # context number
+        painter.setPen(QColor('#1d4ed8') if self._hi else QColor('#1b1b1b'))
+        f1 = QFont('Arial', max(6, int(BOX_H * 0.32))); f1.setBold(True)
         painter.setFont(f1)
-        painter.drawText(QRectF(1, 1, BOX_W-2, BOX_H*0.56), Qt.AlignCenter, str(self.num))
-        # Type abbreviation (tiny, bottom half)
-        t = self.ctx.get('type','')[:3]
+        painter.drawText(QRectF(5, 2, BOX_W-7, BOX_H*0.58), Qt.AlignCenter, str(self.num))
+        # type label
+        t = (self.ctx.get('type','') or '')[:8]
         if t:
-            painter.setPen(QPen(QColor('#555555')))
-            f2 = QFont('Arial', max(4, int(BOX_H * 0.24))); painter.setFont(f2)
-            painter.drawText(QRectF(1, BOX_H*0.54, BOX_W-2, BOX_H*0.44), Qt.AlignCenter, t)
+            painter.setPen(QPen(QColor('#7c7264')))
+            f2 = QFont('Arial', max(5, int(BOX_H * 0.21))); painter.setFont(f2)
+            painter.drawText(QRectF(5, BOX_H*0.56, BOX_W-7, BOX_H*0.4), Qt.AlignCenter, t)
     def mousePressEvent(self,e): self.node_clicked.emit(self.num)
     def set_hi(self,on): self._hi=on; self.update()
 
@@ -102,10 +123,18 @@ class HarrisView(QGraphicsView):
         self.viewport().update()
     def wheelEvent(self,e):
         f=1.15 if e.angleDelta().y()>0 else 1/1.15; self.scale(f,f)
-    def build(self,contexts,relationships,on_click):
+    def build(self,contexts,relationships,on_click,hide_isolated=False):
         self._sc.clear(); self._nodes={}
+        if hide_isolated:
+            connected={r['from_ctx'] for r in relationships}|{r['to_ctx'] for r in relationships}
+            contexts=[c for c in contexts if c['num'] in connected]
+            relationships=[r for r in relationships
+                           if r['from_ctx'] in connected and r['to_ctx'] in connected]
         if not contexts:
-            t=self._sc.addText("No contexts — add them in the Contexts tab, then click Build Matrix.")
+            msg=("No related contexts — every context is isolated."
+                 if hide_isolated else
+                 "No contexts — add them in the Contexts tab, then click Build Matrix.")
+            t=self._sc.addText(msg)
             t.setDefaultTextColor(QColor(getattr(self, '_text_hex', '#888'))); return
         pos=compute_layout(contexts,relationships)
         # ── Classic B&W lines ──

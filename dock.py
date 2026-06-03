@@ -64,7 +64,7 @@ from .data_manager import (SCHEMAS, TABLE_NAMES, coerce, vlayers as dm_vlayers,
                             user_data_dir, fmt_cell, library_dir, set_library_dir,
                             site_dir, list_sites_in_library)
 from .recording_sheets import RecordingSheetsTab
-from .harris_view import HarrisView
+from .harris_view import HarrisView, BOX_H
 
 # ── Vocabularies ──────────────────────────────────────────────────────────────
 CTX_TYPES = ['Fill','Cut','Deposit','Layer','Wall','Floor','Pit',
@@ -3444,8 +3444,12 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         png=QPushButton("Export PNG"); png.setObjectName("btn_ghost"); png.clicked.connect(self._exp_png)
         self._matrix_auto_arrange = QCheckBox("Auto-arrange by period")
         self._matrix_auto_arrange.stateChanged.connect(lambda: self._build_matrix())
+        self._matrix_hide_iso = QCheckBox("Hide unrelated contexts")
+        self._matrix_hide_iso.setToolTip("Hide contexts that have no stratigraphic "
+                                         "relationships, so only the sequence shows")
+        self._matrix_hide_iso.stateChanged.connect(lambda: self._build_matrix())
         for b in [bb,fit,svg,png]: br.addWidget(b)
-        br.addWidget(self._matrix_auto_arrange); br.addStretch()
+        br.addWidget(self._matrix_auto_arrange); br.addWidget(self._matrix_hide_iso); br.addStretch()
         vl.addLayout(br); self.hv=HarrisView()
         self.hv.update_theme(
             bg_hex=getattr(self,'_current_theme',LIGHT_CLR).get('bg_card','#F8F5EE'),
@@ -3506,7 +3510,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         split.addWidget(side, 1)
         outer.addLayout(split, 3)
         # Harris Matrix preview — highlights the selected context
-        prev_card = Card("Harris Matrix (preview)", "Selected context highlighted in the sequence")
+        prev_card = Card("Relationships (preview)", "The selected context and the units it is directly related to")
         self._ctx_hv = HarrisView(); self._ctx_hv.setMinimumHeight(190)
         _tc = getattr(self, '_current_theme', LIGHT_CLR)
         self._ctx_hv.update_theme(bg_hex=_tc.get('bg_card', '#F8F5EE'),
@@ -3522,16 +3526,34 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         return page
 
     def _update_ctx_matrix_preview(self, num=None, rebuild=False):
-        """Build (lazily) and highlight the Contexts-tab Harris matrix preview."""
+        """Preview ONLY the selected context and the units it is directly
+        related to (its immediate stratigraphic neighbours), not the whole
+        matrix."""
         if not hasattr(self, '_ctx_hv'):
             return
         try:
-            if rebuild or not getattr(self._ctx_hv, '_nodes', None):
-                self._load_ctx()
-                all_rels = (self.relationships or []) + (self.layer_rels or [])
-                self._ctx_hv.build(list(self.ctx_data.values()), all_rels, self._on_node_click)
             if num is not None:
-                self._ctx_hv.highlight(num)
+                self._ctx_preview_num = num
+            num = getattr(self, '_ctx_preview_num', None)
+            self._load_ctx()
+            all_rels = (self.relationships or []) + (self.layer_rels or [])
+            if num is None or num not in self.ctx_data:
+                self._ctx_hv._sc.clear(); self._ctx_hv._nodes = {}
+                hint = self._ctx_hv._sc.addText(
+                    "Select a context above to preview its relationships.")
+                hint.setDefaultTextColor(QColor(getattr(self._ctx_hv, '_text_hex', '#888')))
+                return
+            neigh = {num}; sub_rels = []
+            for r in all_rels:
+                if r['from_ctx'] == num or r['to_ctx'] == num:
+                    neigh.add(r['from_ctx']); neigh.add(r['to_ctx']); sub_rels.append(r)
+            sub_ctx = [self.ctx_data[n] for n in neigh if n in self.ctx_data]
+            self._ctx_hv.build(sub_ctx, sub_rels, self._on_node_click)
+            self._ctx_hv.highlight(num)
+            if len(sub_rels) == 0:
+                note = self._ctx_hv._sc.addText("  (no recorded relationships)")
+                note.setDefaultTextColor(QColor(getattr(self._ctx_hv, '_text_hex', '#888')))
+                note.setPos(0, BOX_H + 12)
             self._ctx_hv.fit()
         except Exception:
             pass
@@ -5228,7 +5250,8 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
     # ── Matrix ────────────────────────────────────────────────────────────────
     def _build_matrix(self):
         self._load_ctx(); all_rels=self.relationships+self.layer_rels
-        self.hv.build(list(self.ctx_data.values()),all_rels,self._on_node_click)
+        hide = self._matrix_hide_iso.isChecked() if hasattr(self,'_matrix_hide_iso') else False
+        self.hv.build(list(self.ctx_data.values()),all_rels,self._on_node_click,hide_isolated=hide)
         self._refresh_rel_tbl(); self.hv.fit()
 
     def _on_node_click(self,num):

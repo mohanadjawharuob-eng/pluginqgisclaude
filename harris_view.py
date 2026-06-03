@@ -8,7 +8,7 @@ from qgis.PyQt.QtSvg import QSvgGenerator
 
 from .styles import CLR, FONT_MONO
 
-BOX_W, BOX_H, H_GAP, V_GAP, PAD = 112, 44, 46, 78, 46
+BOX_W, BOX_H, H_GAP, V_GAP, PAD = 84, 34, 24, 50, 28
 
 CTX_COLORS = {
     'fill':'#b8d4c8','cut':'#e8b99a','deposit':'#d4c89a','layer':'#c4b8d8',

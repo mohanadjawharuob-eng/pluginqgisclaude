@@ -3397,8 +3397,37 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         sv.addStretch()
         side.setMinimumWidth(280); side.setMaximumWidth(340)
         split.addWidget(side, 1)
-        outer.addLayout(split, 1)
+        outer.addLayout(split, 3)
+        # Harris Matrix preview — highlights the selected context
+        prev_card = Card("Harris Matrix (preview)", "Selected context highlighted in the sequence")
+        self._ctx_hv = HarrisView(); self._ctx_hv.setMinimumHeight(190)
+        _tc = getattr(self, '_current_theme', LIGHT_CLR)
+        self._ctx_hv.update_theme(bg_hex=_tc.get('bg_card', '#F8F5EE'),
+                                  line_hex=_tc.get('text', '#2E2A26'),
+                                  text_hex=_tc.get('text_dim', '#6F655B'))
+        prev_card.body_layout.addWidget(self._ctx_hv)
+        hp = prev_card.header_layout()
+        _rb = QPushButton("↻ Rebuild"); _rb.setObjectName("btn_ghost"); _rb.setCursor(Qt.PointingHandCursor)
+        _rb.clicked.connect(lambda: self._update_ctx_matrix_preview(rebuild=True))
+        if hp is not None: hp.addWidget(_rb)
+        else: prev_card.body_layout.addWidget(_rb)
+        outer.addWidget(prev_card, 2)
         return page
+
+    def _update_ctx_matrix_preview(self, num=None, rebuild=False):
+        """Build (lazily) and highlight the Contexts-tab Harris matrix preview."""
+        if not hasattr(self, '_ctx_hv'):
+            return
+        try:
+            if rebuild or not getattr(self._ctx_hv, '_nodes', None):
+                self._load_ctx()
+                all_rels = (self.relationships or []) + (self.layer_rels or [])
+                self._ctx_hv.build(list(self.ctx_data.values()), all_rels, self._on_node_click)
+            if num is not None:
+                self._ctx_hv.highlight(num)
+            self._ctx_hv.fit()
+        except Exception:
+            pass
 
     def _count_finds_in_ctx(self, cb, ctx_num):
         """Count features in a finds layer whose context_num matches."""
@@ -5117,6 +5146,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         lyr.removeSelection(); lyr.select(fids[ri])
         self.iface.mapCanvas().panToSelected(lyr)
         self._flash_feature(lyr, fids[ri]); self._block=False
+        self._update_ctx_matrix_preview(num)
 
     def _on_qgis_sel(self,sel,desel,clear):
         if self._block or not sel: return

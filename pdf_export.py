@@ -53,6 +53,22 @@ def _mk_font(family, size, bold=False, italic=False):
     return f
 
 
+def _tw(fm, s):
+    """Text advance width, compatible across Qt versions."""
+    return fm.horizontalAdvance(s) if hasattr(fm, 'horizontalAdvance') else fm.width(s)
+
+
+def _fit_font(family, text, max_w, start_size, min_size=10, bold=False):
+    """Return the largest font (<= start_size) whose `text` fits in `max_w`."""
+    size = int(start_size)
+    while size > min_size:
+        f = _mk_font(family, size, bold=bold)
+        if _tw(QFontMetrics(f), text) <= max_w:
+            return f
+        size -= 1
+    return _mk_font(family, max(min_size, size), bold=bold)
+
+
 # ── Data cleaning ─────────────────────────────────────────────────────────────
 def _clean_val(v):
     """Convert a raw QGIS attribute into a display string.
@@ -443,24 +459,31 @@ class Page:
 
     # ── running header / footer ──
     def _draw_header(self):
-        p=self.p; ML=self.ML; W=self.W; fs=self.fs
-        logo_h = min(26, int(self.opts.get("logo_size", 40)))
+        # Running header is chrome: fixed-size fonts (independent of body
+        # font_scale) and text elided so it never collides with the logo.
+        p=self.p; ML=self.ML; W=self.W
+        logo_h = min(22, int(self.opts.get("logo_size", 40)))
+        logo_w = 0
+        if self.logo and not self.logo.isNull():
+            logo_w = int(self.logo.width()*logo_h/max(1, self.logo.height()))
+            p.drawPixmap(W-ML-logo_w, self.MT-26, logo_w, logo_h, self.logo)
         # left accent tick
         p.setBrush(QBrush(self.C_ACC)); p.setPen(Qt.NoPen)
-        p.drawRect(ML, self.MT-26, 3, 20)
-        # site / title text
-        site = self.opts.get("site","").strip()
+        p.drawRect(ML, self.MT-24, 3, 18)
+        avail = W - 2*ML - logo_w - 16
+        site  = self.opts.get("site","").strip()
         title = self.opts.get("title","Archaeological Site Report")
-        p.setFont(_mk_font("Helvetica", max(1,int(8*fs)), bold=True)); p.setPen(self.C_TEXT)
-        p.drawText(ML+8, self.MT-18, (site or title).upper())
-        p.setFont(_mk_font("Helvetica", max(1,int(6.5*fs)))); p.setPen(self.C_MUTE)
-        p.drawText(ML+8, self.MT-9, title if site else self.opts.get("season",""))
-        # logo right
-        if self.logo and not self.logo.isNull():
-            lw = int(self.logo.width()*logo_h/max(1, self.logo.height()))
-            p.drawPixmap(W-ML-lw, self.MT-28, lw, logo_h, self.logo)
+        line1 = (site or title).upper()
+        line2 = title if site else self.opts.get("season","")
+        f1=_mk_font("Helvetica", 8, bold=True); f2=_mk_font("Helvetica", 6)
+        fm1=QFontMetrics(f1); fm2=QFontMetrics(f2)
+        p.setFont(f1); p.setPen(self.C_TEXT)
+        p.drawText(ML+8, self.MT-16, fm1.elidedText(line1, Qt.ElideRight, max(20,int(avail))))
+        if line2:
+            p.setFont(f2); p.setPen(self.C_MUTE)
+            p.drawText(ML+8, self.MT-7, fm2.elidedText(line2, Qt.ElideRight, max(20,int(avail))))
         # bottom rule
-        p.setPen(QPen(self.C_ACC, 0.8)); p.drawLine(ML, self.MT-4, W-ML, self.MT-4)
+        p.setPen(QPen(self.C_ACC, 0.8)); p.drawLine(ML, self.MT-2, W-ML, self.MT-2)
 
     def _draw_footer(self):
         p=self.p; ML=self.ML; W=self.W; H=self.H; fs=self.fs
@@ -498,21 +521,30 @@ class Page:
         return False
 
     def section_title_page(self, title, subtitle=""):
-        """Clean section divider (no full-bleed band — keeps it professional)."""
+        """Clean section divider (no full-bleed band — keeps it professional).
+        Title auto-shrinks to fit the page width; subtitle flows below it."""
         self.new_page()
         p=self.p; ML=self.ML; W=self.W; BW=self.BW
-        cy = self.H*0.40
-        p.setPen(QPen(self.C_ACC, 2)); p.drawLine(ML, int(cy-26), ML+50, int(cy-26))
-        p.setFont(_mk_font("Helvetica", max(1,int(26*self.fs)), bold=True))
-        p.setPen(self.C_HEAD)
-        p.drawText(QRectF(ML, cy-18, BW, 60), Qt.AlignLeft|Qt.AlignVCenter, title)
-        if subtitle:
-            p.setFont(_mk_font("Helvetica", max(1,int(10*self.fs))))
-            p.setPen(self.C_MUTE)
-            p.drawText(QRectF(ML, cy+30, BW, 24), Qt.AlignLeft, subtitle)
+        cy = int(self.H*0.40)
+        # logo on the right, reserve its width
+        logo_w=0
         if self.logo and not self.logo.isNull():
-            lh=34; lw=int(self.logo.width()*lh/max(1,self.logo.height()))
-            p.drawPixmap(W-ML-lw, int(cy-30), lw, lh, self.logo)
+            lh=32; logo_w=int(self.logo.width()*lh/max(1,self.logo.height()))
+            p.drawPixmap(W-ML-logo_w, cy-28, logo_w, lh, self.logo)
+        avail = BW - logo_w - 18
+        # accent tick
+        p.setPen(QPen(self.C_ACC, 2)); p.drawLine(ML, cy-24, ML+50, cy-24)
+        # title — auto-fit to width so it never clips
+        f=_fit_font("Helvetica", title, max(60,int(avail)), int(26*self.fs),
+                    min_size=12, bold=True)
+        fm=QFontMetrics(f); p.setFont(f); p.setPen(self.C_HEAD)
+        base = cy + fm.ascent()//2
+        p.drawText(ML, base, title)
+        if subtitle:
+            sf=_mk_font("Helvetica", max(8,int(10*self.fs)))
+            sfm=QFontMetrics(sf); p.setFont(sf); p.setPen(self.C_MUTE)
+            p.drawText(ML, base + fm.descent() + 8 + sfm.ascent(),
+                       sfm.elidedText(subtitle, Qt.ElideRight, max(40,int(avail))))
 
     def table(self, headers, rows, col_widths=None, image_col=None):
         """Render a table. image_col: index of a column whose cells are image
@@ -789,112 +821,134 @@ class Page:
 
 # ── Harris Matrix — classic B&W portrait renderer ───────────────────────────
 def _draw_harris_pdf(pg, win, n_pages, hide_isolated=False):
-    from .harris_view import compute_layout
+    """Draw the Harris matrix using the real graph layout, fitted to the page
+    width (portrait — never clipped) and flowed vertically across as few pages
+    as possible. `n_pages` is a soft cap on the page count."""
+    from .harris_view import compute_layout, BOX_W as NW, BOX_H as NH
     contexts = list(win.ctx_data.values())
-    all_rels  = win.relationships + getattr(win,'layer_rels',[])
+    all_rels = win.relationships + getattr(win,'layer_rels',[])
     if hide_isolated:
         connected = {r['from_ctx'] for r in all_rels}|{r['to_ctx'] for r in all_rels}
         contexts  = [c for c in contexts if c['num'] in connected]
+        all_rels  = [r for r in all_rels
+                     if r['from_ctx'] in connected and r['to_ctx'] in connected]
     if not contexts:
         pg.new_page(); pg.heading1("Harris Matrix")
         pg.body_text("No contexts — build the matrix first."); return
 
-    positions = compute_layout(contexts, all_rels)
-    level_map = {}
-    for ctx in contexts:
-        n = ctx['num']
-        if n not in positions: continue
-        _x, y = positions[n]; lv = round(y/10)*10
-        level_map.setdefault(lv,[]).append(ctx)
-    sorted_levels = sorted(level_map.keys())
+    pos = compute_layout(contexts, all_rels)
+    nums = [c['num'] for c in contexts if c['num'] in pos]
+    if not nums:
+        pg.new_page(); pg.heading1("Harris Matrix")
+        pg.body_text("No positioned contexts to draw."); return
+    ctx_by_num = {c['num']: c for c in contexts}
+    xs=[pos[n][0] for n in nums]; ys=[pos[n][1] for n in nums]
+    minx=min(xs); natW=(max(xs)+NW)-minx
+    natH=(max(ys)+NH)-min(ys)
 
-    ML = pg.ML; BW = pg.BW
-    MAX_PER_ROW = max(4, min(12, n_pages*4))
-    BOX_W = max(30, int((BW - 6*(MAX_PER_ROW-1)) // MAX_PER_ROW))
-    H_GAP = max(6, (BW - BOX_W*MAX_PER_ROW)//(MAX_PER_ROW-1) if MAX_PER_ROW>1 else 6)
-    BOX_H = 22; V_GAP = 26          # bigger vertical gap -> no overlap
-    LINE_COL=QColor('#222222'); BOX_FILL=QColor('#ffffff'); BOX_BORDER=QColor('#222222'); TEXT_COL=QColor('#000000')
-    fs = pg.fs
+    rows={}
+    for n in nums: rows.setdefault(round(pos[n][1]), []).append(n)
+    row_ys=sorted(rows)
 
-    boxes={}; page_idx=0; curr_y=pg.MT+34; BODY_BOT=pg.H-pg.MB-16
-    def new_vpage():
-        nonlocal page_idx, curr_y
-        page_idx += 1; curr_y = pg.MT + 34
-    for lv in sorted_levels:
-        row_ctxs = sorted(level_map[lv], key=lambda c: c['num'])
-        for rs in range(0, len(row_ctxs), MAX_PER_ROW):
-            row = row_ctxs[rs:rs+MAX_PER_ROW]
-            if curr_y + BOX_H + V_GAP > BODY_BOT: new_vpage()
-            n_row=len(row); row_w=n_row*(BOX_W+H_GAP)-H_GAP; x0=ML+(BW-row_w)//2
-            for i,ctx in enumerate(row):
-                bx=x0+i*(BOX_W+H_GAP)
-                boxes[ctx['num']]={'x':bx,'y':curr_y,'cx':int(bx+BOX_W/2),
-                                   'cy':int(curr_y+BOX_H/2),'page':page_idx,'ctx':ctx}
-            curr_y += BOX_H + V_GAP
-        curr_y += 6
-    total_pages = page_idx + 1
+    ML=pg.ML; BW=pg.BW
+    BODY_BOT=pg.H-pg.MB-14
+    TITLE_H=26
+    page_h=max(120, BODY_BOT-(pg.MT+TITLE_H))
+    max_pages=max(1, int(n_pages))
+    # fit to width, never upscale, and respect the page-count cap
+    s=min(BW/float(natW), 1.0)
+    if natH*s > max_pages*page_h:
+        s=min(s, max_pages*page_h/float(natH))
+    x_off=(BW-natW*s)/2.0
 
-    for pi in range(total_pages):
+    def px(n):  return ML + x_off + (pos[n][0]-minx)*s   # box left, page coords
+
+    # paginate vertically at row boundaries
+    pages=[]; cur=[]; y0=row_ys[0]; cap=BODY_BOT-(pg.MT+TITLE_H)
+    for ry in row_ys:
+        if cur and (ry+NH-y0)*s > cap:
+            pages.append((cur,y0)); cur=[ry]; y0=ry; cap=BODY_BOT-(pg.MT+18)
+        cur.append(ry)
+    pages.append((cur,y0))
+    total=len(pages)
+    page_of={}; ptop={}
+    for pi,(rys,pg_y0) in enumerate(pages):
+        ptop[pi]=pg_y0
+        for ry in rys:
+            for n in rows[ry]: page_of[n]=pi
+
+    BOXW=NW*s; BOXH=NH*s
+    numsz=max(4,min(13,int(BOXH*0.5))); subsz=max(3,min(8,int(BOXH*0.30)))
+    fnt_num=_mk_font("Courier New", numsz, bold=True)
+    fnt_sub=_mk_font("Helvetica", subsz)
+    fnt_mk =_mk_font("Helvetica", 6)     # fixed small cross-page marker font
+    LINE=QColor('#222'); FILL=QColor('#fff'); BORD=QColor('#222'); TX=QColor('#000')
+
+    def topy(pi): return pg.MT+TITLE_H if pi==0 else pg.MT+18
+    def pyy(n,pi): return topy(pi) + (pos[n][1]-ptop[pi])*s
+
+    for pi in range(total):
         pg.new_page(is_first=(pi==0))
         p=pg.p
         if pi==0:
-            p.setFont(_mk_font("Helvetica",max(1,int(15*fs)),bold=True)); p.setPen(pg.C_HEAD)
-            p.drawText(ML, pg.y+4, "HARRIS MATRIX")
-            pg.y+=14; p.setPen(QPen(pg.C_ACC,1.4)); p.drawLine(ML,pg.y,ML+BW,pg.y); pg.y+=8
-        fnt_num=_mk_font("Courier New",max(1,int(max(6,BOX_H*0.4*fs))),bold=True)
-        fnt_sub=_mk_font("Helvetica",max(1,int(max(4,BOX_H*0.26*fs))))
-        # same-page lines
-        p.setPen(QPen(LINE_COL,0.8))
+            p.setFont(_mk_font("Helvetica",max(1,int(15*pg.fs)),bold=True)); p.setPen(pg.C_HEAD)
+            p.drawText(ML, pg.MT+12, "HARRIS MATRIX")
+            p.setPen(QPen(pg.C_ACC,1.4)); p.drawLine(ML,pg.MT+18,ML+BW,pg.MT+18)
+        # ── relationships ──
         for rel in all_rels:
             f,t,rt=rel['from_ctx'],rel['to_ctx'],rel['rel_type']
-            contemp=rt in ('contemporary','equals')
-            if rt in ('below','is_cut_by'): f,t=t,f
-            bf=boxes.get(f); bt=boxes.get(t)
-            if not bf or not bt or bf['page']!=pi or bt['page']!=pi: continue
-            py1=bf['y']; py2=bt['y']; p1cx=bf['cx']; p2cx=bt['cx']
-            if contemp:
-                p.setPen(QPen(LINE_COL,0.7,Qt.DashLine)); base=max(py1,py2)+BOX_H+6
-                for off in (0,3):
-                    p.drawLine(p1cx,int(py1+BOX_H),p1cx,int(base+off))
-                    p.drawLine(p1cx,int(base+off),p2cx,int(base+off))
-                    p.drawLine(p2cx,int(base+off),p2cx,int(bt['y']+BOX_H))
-                p.setPen(QPen(LINE_COL,0.8))
-            else:
-                mid=int((py1+BOX_H+py2)//2)
-                p.drawLine(p1cx,int(py1+BOX_H),p1cx,mid)
-                p.drawLine(p1cx,mid,p2cx,mid); p.drawLine(p2cx,mid,p2cx,int(py2))
-        # cross-page stubs
-        for rel in all_rels:
-            f,t,rt=rel['from_ctx'],rel['to_ctx'],rel['rel_type']
-            if rt in ('below','is_cut_by'): f,t=t,f
-            bf=boxes.get(f); bt=boxes.get(t)
-            if not bf or not bt or bf['page']==bt['page']: continue
-            for binfo,is_from in [(bf,True),(bt,False)]:
-                if binfo['page']!=pi: continue
-                other_p=(bt if is_from else bf)['page']
-                bx2=binfo['cx']; by2=binfo['y']
-                p.setPen(QPen(QColor('#777'),0.6,Qt.DotLine))
-                if is_from:
-                    p.drawLine(bx2,int(by2+BOX_H),bx2,int(by2+BOX_H+9))
-                    p.setPen(QColor('#999')); p.drawText(bx2-7,int(by2+BOX_H+18),f"p{other_p+1}")
+            if f not in page_of or t not in page_of: continue
+            contemp = rt in ('contemporary','equals')
+            u,d = (f,t) if pos[f][1] <= pos[t][1] else (t,f)   # u = upper box
+            if page_of[u]==pi and page_of[d]==pi:
+                ux=px(u)+BOXW/2; uy=pyy(u,pi)+BOXH
+                dx=px(d)+BOXW/2; dy=pyy(d,pi)
+                if contemp:
+                    p.setPen(QPen(LINE,0.7,Qt.DashLine))
+                    base=max(uy, pyy(d,pi)+BOXH)+4
+                    p.drawLine(int(ux),int(uy),int(ux),int(base))
+                    p.drawLine(int(ux),int(base),int(dx),int(base))
+                    p.drawLine(int(dx),int(base),int(dx),int(dy+BOXH))
                 else:
-                    p.drawLine(bx2,int(by2-9),bx2,int(by2))
-                    p.setPen(QColor('#999')); p.drawText(bx2-7,int(by2-11),f"p{other_p+1}")
-        # boxes
-        for num,binfo in boxes.items():
-            if binfo['page']!=pi: continue
-            bx=binfo['x']; by=binfo['y']
-            p.setBrush(QBrush(BOX_FILL)); p.setPen(QPen(BOX_BORDER,0.9))
-            p.drawRect(int(bx),int(by),BOX_W,BOX_H)
-            p.setFont(fnt_num); p.setPen(TEXT_COL)
-            p.drawText(QRectF(bx+1,by+1,BOX_W-2,BOX_H*0.6),Qt.AlignCenter,str(num))
-            t2=_clean_val(binfo['ctx'].get('type',''))[:4]
-            if t2:
-                p.setFont(fnt_sub); p.setPen(QColor('#666'))
-                p.drawText(QRectF(bx+1,by+BOX_H*0.55,BOX_W-2,BOX_H*0.42),Qt.AlignCenter,t2)
-        if total_pages>1:
-            p.setFont(_mk_font("Helvetica",max(1,int(6.5*fs)))); p.setPen(QColor('#999'))
-            p.drawText(pg.W-pg.ML-66,pg.H-pg.MB-2,f"Sheet {pi+1} / {total_pages}")
+                    p.setPen(QPen(LINE,0.8)); mid=int((uy+dy)//2)
+                    p.drawLine(int(ux),int(uy),int(ux),mid)
+                    p.drawLine(int(ux),mid,int(dx),mid)
+                    p.drawLine(int(dx),mid,int(dx),int(dy))
+            elif page_of[u]==pi or page_of[d]==pi:
+                on = u if page_of[u]==pi else d
+                other = d if on is u else u
+                onx=px(on)+BOXW/2
+                p.setPen(QPen(QColor('#888'),0.6,Qt.DotLine))
+                if on is u:                       # continues onto a later sheet
+                    oy=pyy(on,pi)+BOXH
+                    p.drawLine(int(onx),int(oy),int(onx),int(oy+8))
+                    p.setFont(fnt_mk); p.setPen(QColor('#777'))
+                    p.drawText(int(onx-8),int(oy+16),f"▾{other}")
+                else:                             # continues from an earlier sheet
+                    oy=pyy(on,pi)
+                    p.drawLine(int(onx),int(oy-8),int(onx),int(oy))
+                    p.setFont(fnt_mk); p.setPen(QColor('#777'))
+                    p.drawText(int(onx-8),int(oy-10),f"▴{other}")
+        # ── boxes ──
+        for n in nums:
+            if page_of[n]!=pi: continue
+            bx=px(n); by=pyy(n,pi)
+            p.setBrush(QBrush(FILL)); p.setPen(QPen(BORD,0.9))
+            p.drawRect(int(bx),int(by),int(BOXW),int(BOXH))
+            p.setPen(TX)
+            if subsz>=4 and BOXH>=16:
+                p.setFont(fnt_num)
+                p.drawText(QRectF(bx,by+1,BOXW,BOXH*0.58),Qt.AlignCenter,str(n))
+                t2=_clean_val(ctx_by_num[n].get('type',''))[:4]
+                if t2:
+                    p.setFont(fnt_sub); p.setPen(QColor('#666'))
+                    p.drawText(QRectF(bx,by+BOXH*0.54,BOXW,BOXH*0.44),Qt.AlignCenter,t2)
+            else:
+                p.setFont(fnt_num)
+                p.drawText(QRectF(bx,by,BOXW,BOXH),Qt.AlignCenter,str(n))
+        if total>1:
+            p.setFont(_mk_font("Helvetica",max(1,int(6.5*pg.fs)))); p.setPen(QColor('#999'))
+            p.drawText(pg.W-pg.ML-72,pg.H-pg.MB-2,f"Sheet {pi+1} / {total}")
     pg.y = pg.H - pg.MB
 
 
@@ -1124,31 +1178,43 @@ def _draw_cover(pg, p, opts, logo_px, sec_order, sections):
     p.setBrush(QBrush(pg.C_ACC)); p.drawRect(0,0,6,H)
 
     y=64
-    # institution line
-    p.setFont(_mk_font("Helvetica", max(1,int(8*fs)), bold=True)); p.setPen(pg.C_MUTE)
-    p.drawText(ML, y, "DEPARTMENT OF ARCHAEOLOGY & MUSEOLOGY · UNIVERSITY OF BALAMAND")
+    # institution line — auto-fit to width (with margin) so it never clips
+    inst = "DEPARTMENT OF ARCHAEOLOGY & MUSEOLOGY · UNIVERSITY OF BALAMAND"
+    inf = _fit_font("Helvetica", inst, int(BW*0.92), min(int(8*fs), 9),
+                    min_size=6, bold=True)
+    p.setFont(inf); p.setPen(pg.C_MUTE)
+    p.drawText(ML, y, inst)
     y += 10
-    p.setPen(QPen(pg.C_ACC,0.8)); p.drawLine(ML, y, W-ML, y); y += 44
+    p.setPen(QPen(pg.C_ACC,0.8)); p.drawLine(ML, y, W-ML, y); y += 40
 
-    # title
+    # title — auto-fit (widest word must fit), word-wrap, advance by real height.
+    # Cap the display size and fit to 95% width so substitute fonts never clip.
     title = opts.get("title","Archaeological Site Report")
-    p.setFont(_mk_font("Helvetica", max(1,int(30*fs)), bold=True)); p.setPen(pg.C_HEAD)
-    p.drawText(QRectF(ML, y, BW, 90), Qt.TextWordWrap, title)
-    y += 84
+    longest = max(title.split(), key=len) if title.split() else title
+    tf = _fit_font("Helvetica", longest, int(BW*0.95), min(int(30*fs), 34),
+                   min_size=15, bold=True)
+    p.setFont(tf); p.setPen(pg.C_HEAD)
+    trect = p.boundingRect(QRectF(ML, y, BW, 240), Qt.TextWordWrap, title)
+    p.drawText(QRectF(ML, y, BW, 240), Qt.TextWordWrap, title)
+    y += int(trect.height()) + 12
     # site + season subtitle
     sub_bits = [b for b in [opts.get("site","").strip(), opts.get("season","").strip()] if b]
     if sub_bits:
-        p.setFont(_mk_font("Helvetica", max(1,int(13*fs)))); p.setPen(pg.C_ACC)
-        p.drawText(ML, y, "  ·  ".join(sub_bits)); y += 22
-    p.setFont(_mk_font("Helvetica", max(1,int(7.5*fs)))); p.setPen(pg.C_MUTE)
-    p.drawText(ML, y, "OFFICIAL FIELD DOCUMENTATION"); y += 18
-    p.setPen(QPen(pg.C_LINE,0.6)); p.drawLine(ML, y, W-ML, y); y += 18
+        sbf=_mk_font("Helvetica", max(9,int(13*fs))); p.setFont(sbf); p.setPen(pg.C_ACC)
+        p.drawText(ML, y+QFontMetrics(sbf).ascent(), "  ·  ".join(sub_bits))
+        y += QFontMetrics(sbf).height() + 4
+    of=_mk_font("Helvetica", max(6,int(7.5*fs))); p.setFont(of); p.setPen(pg.C_MUTE)
+    p.drawText(ML, y+QFontMetrics(of).ascent(), "OFFICIAL FIELD DOCUMENTATION")
+    y += QFontMetrics(of).height() + 8
+    p.setPen(QPen(pg.C_LINE,0.6)); p.drawLine(ML, y, W-ML, y); y += 16
 
-    # abstract
+    # abstract — advance by the real wrapped height
     desc = opts.get("cover_desc","").strip()
     if desc:
-        p.setFont(_mk_font("Helvetica", max(1,int(9*fs)))); p.setPen(pg.C_TEXT)
-        p.drawText(QRectF(ML, y, BW*0.7, 70), Qt.TextWordWrap, desc); y += 70
+        df=_mk_font("Helvetica", max(8,int(9*fs))); p.setFont(df); p.setPen(pg.C_TEXT)
+        drect = p.boundingRect(QRectF(ML, y, BW*0.72, 400), Qt.TextWordWrap, desc)
+        p.drawText(QRectF(ML, y, BW*0.72, 400), Qt.TextWordWrap, desc)
+        y += int(drect.height()) + 14
 
     # hero image (cover photo or logo)
     cover_img = opts.get("cover_img","").strip()
@@ -1175,28 +1241,25 @@ def _draw_cover(pg, p, opts, logo_px, sec_order, sections):
         y = box_top + box_h + 24
 
     # table of contents
-    p.setFont(_mk_font("Helvetica", max(1,int(11*fs)), bold=True)); p.setPen(pg.C_HEAD)
-    p.drawText(ML, y+12, "Contents"); y += 18
-    p.setPen(QPen(pg.C_ACC,0.8)); p.drawLine(ML, y, W-ML, y); y += 14
-    fm=p.fontMetrics()
+    chf=_mk_font("Helvetica", max(9,int(11*fs)), bold=True)
+    p.setFont(chf); p.setPen(pg.C_HEAD)
+    y += QFontMetrics(chf).ascent()
+    p.drawText(ML, y, "Contents"); y += QFontMetrics(chf).descent() + 6
+    p.setPen(QPen(pg.C_ACC,0.8)); p.drawLine(ML, y, W-ML, y)
+    itf=_mk_font("Helvetica", max(8,int(9*fs))); itfb=_mk_font("Helvetica", max(8,int(9*fs)), bold=True)
+    fm=QFontMetrics(itf); row_h=max(15, int(fm.lineSpacing()*1.5))
     pg_n=2
-    p.setFont(_mk_font("Helvetica", max(1,int(9*fs))))
     for sec_k in sec_order:
         if sec_k=="cover" or not sections.get(sec_k, True): continue
         name=SECTION_NAMES.get(sec_k, sec_k)
-        item_y=y+12
-        tw=fm.horizontalAdvance(name) if hasattr(fm,'horizontalAdvance') else fm.width(name)
-        pgs=str(pg_n)
-        pw=fm.horizontalAdvance(pgs) if hasattr(fm,'horizontalAdvance') else fm.width(pgs)
+        y += row_h
+        item_y=y
+        tw=_tw(fm, name); pgs=str(pg_n); pw=_tw(QFontMetrics(itfb), pgs)
+        p.setFont(itf); p.setPen(pg.C_TEXT); p.drawText(ML, item_y, name)
         p.setPen(QColor('#c9c2b4'))
         dot=ML+tw+6
-        while dot < W-ML-pw-6:
-            p.drawText(int(dot), item_y, "."); dot+=5
-        p.setPen(pg.C_TEXT); p.drawText(ML, item_y, name)
-        p.setFont(_mk_font("Helvetica", max(1,int(9*fs)), bold=True))
-        p.drawText(W-ML-pw, item_y, pgs)
-        p.setFont(_mk_font("Helvetica", max(1,int(9*fs))))
-        y+=16
+        while dot < W-ML-pw-8: p.drawText(int(dot), item_y, "."); dot+=5
+        p.setFont(itfb); p.setPen(pg.C_TEXT); p.drawText(W-ML-pw, item_y, pgs)
         pg_n += (3 if sec_k=='harris' else 2)
 
 

@@ -2385,6 +2385,43 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         except Exception as e:
             self._msg(f"Couldn't open folder: {e}", error=True)
 
+    def _populate_artdet_strip(self, feat):
+        """Fill the Artifact-Detail photo strip with all photos for this find
+        (main image_path + gallery matches by context.object)."""
+        if not hasattr(self, "artdet_strip"):
+            return
+        from qgis.PyQt.QtGui import QPixmap, QIcon
+        from qgis.PyQt.QtCore import Qt as _Qt
+        import re as _re
+        self.artdet_strip.clear()
+        paths = []
+        img = self._attr(feat, "image_path")
+        if img and os.path.exists(str(img)):
+            paths.append(str(img))
+        ctx = safe_int(feat, "context_num"); obj = safe_int(feat, "find_num")
+        reg = getattr(self, "_photo_registry", {}) or {}
+        for cat in ("photos", "drawings", "refs"):
+            for ph in (reg.get(cat, []) or []):
+                p = ph.get("path", "")
+                if not p or not os.path.exists(p):
+                    continue
+                m = _re.search(r"(\d+)\.(\d+)", str(ph.get("caption", "")))
+                if (m and ctx is not None and obj is not None
+                        and int(m.group(1)) == ctx and int(m.group(2)) == obj
+                        and p not in paths):
+                    paths.append(p)
+        for p in paths:
+            it = QListWidgetItem(); px = QPixmap(p)
+            if not px.isNull():
+                it.setIcon(QIcon(px.scaled(110, 78, _Qt.KeepAspectRatio, _Qt.SmoothTransformation)))
+            it.setData(_Qt.UserRole, p); it.setToolTip(os.path.basename(p))
+            self.artdet_strip.addItem(it)
+
+    def _on_artdet_thumb_click(self, item):
+        p = item.data(Qt.UserRole)
+        if p:
+            self._show_artdet_image(p)
+
     def _build_media_tab(self):
         """Photo/Media gallery with categories."""
         page = QWidget()
@@ -3864,49 +3901,53 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         reload_art=QPushButton("↻ Reload list"); reload_art.setObjectName("btn_secondary"); reload_art.clicked.connect(self._load_artdet_list)
         lv.addWidget(reload_art)
         main.addWidget(left)
-        # Right: detail form + image
-        right=QWidget(); rv=QVBoxLayout(right); rv.setContentsMargins(0,0,0,0)
-        # Header showing selected artifact
+        # Right: photo-led detail card
+        right=QWidget(); rv=QVBoxLayout(right); rv.setContentsMargins(0,0,0,0); rv.setSpacing(10)
         self.artdet_header=QLabel("<i>Select an artifact to see/edit its detail record</i>")
-        self.artdet_header.setObjectName("infoBox")
-        self.artdet_header.setWordWrap(True); rv.addWidget(self.artdet_header)
-        # Image area
-        self.artdet_img_label=QLabel()
-        self.artdet_img_label.setMinimumHeight(180); self.artdet_img_label.setAlignment(Qt.AlignCenter)
-        self.artdet_img_label.setObjectName("imageSlot")
-        self.artdet_img_label.setText("📷  No image")
-        rv.addWidget(self.artdet_img_label)
+        self.artdet_header.setObjectName("infoBox"); self.artdet_header.setWordWrap(True)
+        rv.addWidget(self.artdet_header)
+        toprow=QHBoxLayout(); toprow.setSpacing(14)
+        imgcol=QVBoxLayout(); imgcol.setSpacing(6)
+        self.artdet_img_label=QLabel(); self.artdet_img_label.setMinimumSize(240,240)
+        self.artdet_img_label.setAlignment(Qt.AlignCenter); self.artdet_img_label.setObjectName("imageSlot")
+        self.artdet_img_label.setText("\U0001F4F7  No image")
+        imgcol.addWidget(self.artdet_img_label, 1)
         img_row=QHBoxLayout()
-        pick_img=QPushButton("📷 Set image…"); pick_img.setObjectName("btn_secondary"); pick_img.clicked.connect(self._pick_artdet_image)
-        clear_img=QPushButton("✕ Clear"); clear_img.setObjectName("btn_danger"); clear_img.clicked.connect(self._clear_artdet_image)
-        img_row.addWidget(pick_img); img_row.addWidget(clear_img); img_row.addStretch()
-        rv.addLayout(img_row)
-        # Fields
-        scroll=QScrollArea(); scroll.setWidgetResizable(True)
-        form_w=QWidget(); ff=QFormLayout(form_w); ff.setSpacing(4)
+        pick_img=QPushButton("Set image\u2026"); pick_img.setObjectName("btn_secondary"); pick_img.clicked.connect(self._pick_artdet_image)
+        clear_img=QPushButton("Clear"); clear_img.setObjectName("btn_ghost"); clear_img.clicked.connect(self._clear_artdet_image)
+        img_row.addWidget(pick_img); img_row.addWidget(clear_img)
+        imgcol.addLayout(img_row)
+        _imgw=QWidget(); _imgw.setStyleSheet("background:transparent;"); _imgw.setLayout(imgcol); _imgw.setMinimumWidth(250)
+        toprow.addWidget(_imgw)
+        scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setStyleSheet("QScrollArea{border:none;background:transparent;}")
+        form_w=QWidget(); form_w.setStyleSheet("background:transparent;"); ff=QFormLayout(form_w); ff.setSpacing(6)
         self._artdet_fields={}
         field_defs=[
             ("detailed_description","Detailed description"),
             ("condition","Condition"),
             ("material_detail","Material detail"),
             ("provenance","Provenance"),
-            ("dimensions","Dimensions (L×W×H)"),
+            ("dimensions","Dimensions (L\u00d7W\u00d7H)"),
             ("parallels","Parallels / comparanda"),
             ("notes","Notes"),
         ]
         for fname,flabel in field_defs:
-            te=QTextEdit(); te.setMaximumHeight(60)
-            te.setPlaceholderText(flabel)
+            te=QTextEdit(); te.setMaximumHeight(54); te.setPlaceholderText(flabel)
             self._artdet_fields[fname]=te; ff.addRow(flabel+":",te)
-        scroll.setWidget(form_w); rv.addWidget(scroll,1)
-        # Save / new buttons
+        scroll.setWidget(form_w); toprow.addWidget(scroll, 1)
+        rv.addLayout(toprow, 1)
+        _sl=QLabel("PHOTOS  (click a thumbnail to enlarge)"); _sl.setObjectName("mutedXs"); rv.addWidget(_sl)
+        from qgis.PyQt.QtCore import QSize as _QSz0
+        self.artdet_strip=QListWidget(); self.artdet_strip.setObjectName("gallery")
+        self.artdet_strip.setViewMode(QListWidget.IconMode); self.artdet_strip.setFlow(QListWidget.LeftToRight)
+        self.artdet_strip.setWrapping(False); self.artdet_strip.setFixedHeight(98)
+        self.artdet_strip.setIconSize(_QSz0(110,78))
+        self.artdet_strip.itemClicked.connect(self._on_artdet_thumb_click)
+        rv.addWidget(self.artdet_strip)
         sbr=QHBoxLayout()
-        save_btn=QPushButton("💾 Save detail record")
-        save_btn.setObjectName("btn_primary")
-        save_btn.clicked.connect(self._save_artdet)
-        del_btn=QPushButton("🗑 Delete record"); del_btn.setObjectName("btn_danger")
-        del_btn.clicked.connect(self._delete_artdet)
-        for b in [save_btn,del_btn]: sbr.addWidget(b)
+        save_btn=QPushButton("\U0001F4BE Save detail record"); save_btn.setObjectName("btn_primary"); save_btn.clicked.connect(self._save_artdet)
+        del_btn=QPushButton("\U0001F5D1 Delete record"); del_btn.setObjectName("btn_danger"); del_btn.clicked.connect(self._delete_artdet)
+        sbr.addWidget(save_btn); sbr.addWidget(del_btn); sbr.addStretch()
         rv.addLayout(sbr)
         main.addWidget(right,1)
         self._artdet_image_path=""
@@ -3961,11 +4002,13 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         for te in self._artdet_fields.values(): te.clear()
         self._artdet_image_path=""
         self.artdet_img_label.setText("No image")
+        if hasattr(self, "artdet_strip"): self.artdet_strip.clear()
         det_lyr=self._lyr(self.artdet_layer_cb)
         if not det_lyr: return
         for feat in det_lyr.getFeatures():
             try:
                 if str(feat.attribute('artifact_id'))==str(aid):
+                    self._populate_artdet_strip(feat)
                     for fname,te in self._artdet_fields.items():
                         v=feat.attribute(fname)
                         if v: te.setPlainText(str(v))

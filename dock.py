@@ -1001,8 +1001,9 @@ class _HistoryAndTabsMixin:
         w = QWidget(); w.setStyleSheet("background:transparent;")
         vl = QVBoxLayout(w); vl.setContentsMargins(0, 0, 0, 0); vl.setSpacing(0)
 
-        vl.addWidget(ContentTitle("Edit History",
-                                  "Audit trail of all data changes in this project"))
+        vl.addWidget(ContentTitle("Activity Log",
+                                  "Everything done in this project — edits, imports, exports, "
+                                  "photos, crates, relationships, backups and more"))
 
         # Action bar
         ab = QWidget(); ab.setObjectName("actionBar")
@@ -1014,6 +1015,9 @@ class _HistoryAndTabsMixin:
         self.user_input = QLineEdit(self._current_user)
         self.user_input.setMaximumWidth(160); self.user_input.setObjectName("histUserInput")
         self.user_input.textChanged.connect(lambda t: setattr(self, '_current_user', t))
+        self.user_input.editingFinished.connect(
+            lambda: self._log_history('set_user', 'session', self._current_user, '')
+            if getattr(self, '_current_user', '') else None)
 
         refresh = QPushButton("↻ Refresh"); refresh.setObjectName("btn_secondary")
         refresh.clicked.connect(self._load_history)
@@ -1092,6 +1096,8 @@ class _HistoryAndTabsMixin:
         if os.path.exists(media_src):
             shutil.copy2(media_src, backup + '.media.json')
         self._msg(f"Backup saved: {os.path.basename(backup)}")
+        try: self._log_history('backup', os.path.basename(backup), 0, '')
+        except Exception: pass
         QMessageBox.information(self,"Backup complete",f"Saved to:\n{backup}")
 
     # ── Per-context PDF ────────────────────────────────────────────────────────
@@ -1105,7 +1111,10 @@ class _HistoryAndTabsMixin:
         if not path: return
         from .pdf_export import _export_context_page
         ok=_export_context_page(path,num,self)
-        if ok: self._msg(f"Context {num} exported to PDF")
+        if ok:
+            self._msg(f"Context {num} exported to PDF")
+            try: self._log_history('export_context_pdf', os.path.basename(path), num, '')
+            except Exception: pass
         else: QMessageBox.warning(self,"","Export failed")
 
     # ── Load all extension ─────────────────────────────────────────────────────
@@ -1716,7 +1725,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             ("clipboard", "Recording",    "Sheets · Skeletons · Bone"),
             ("map",       "Field",        "Grids · Drawings · Photos"),
             ("chart",     "Analysis",     "Counts · timeline"),
-            ("history",   "Provenance",   "Edit log · by recorder"),
+            ("history",   "Activity Log", "Everything · by recorder"),
         ]
 
         # Group labels inserted before items at these indexes
@@ -1875,7 +1884,7 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             ("Timeline",        self._build_timeline_tab()),
         ])
         provenance = self._section([
-            ("Edit History",    self._build_history_tab()),
+            ("Activity Log",    self._build_history_tab()),
             ("By Archaeologist", self._build_archaeologist_tab()),
         ])
         self._guide_page = self._section([
@@ -2278,9 +2287,11 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                 "Delete this crate? Finds stay but lose their crate assignment.",
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes: return
         lyr = self._lyr(getattr(self, "crate_layer_cb", None))
+        _clabel = self._current_crate[0] if self._current_crate else ''
         if lyr:
             try:
                 lyr.startEditing(); lyr.deleteFeature(self._current_crate[1]); lyr.commitChanges()
+                self._log_history('delete_crate', 'crates', _clabel, '')
             except Exception: pass
         self._current_crate = None; self._reload_crates()
         self._crate_contents_tbl.setRowCount(0)
@@ -2321,6 +2332,8 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         lyr.commitChanges()
         self._load_crate_contents(label); self._reload_crates()
         self._msg(f"Assigned {len(chosen)} find(s) to crate '{label}'")
+        try: self._log_history('assign_crate', pfx, label, f"{len(chosen)} find(s)")
+        except Exception: pass
 
     def _remove_find_from_crate(self):
         rows = self._crate_contents_tbl.selectionModel().selectedRows() if self._crate_contents_tbl.selectionModel() else []
@@ -2374,6 +2387,8 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         if not d: return
         set_library_dir(d); self._refresh_library_list()
         self._msg(f"Library folder set: {d}")
+        try: self._log_history('set_library', d, 0, '')
+        except Exception: pass
 
     def _open_folder(self, path):
         import subprocess
@@ -2996,10 +3011,12 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
                 ("Login",
                  "When the plugin starts, a login dialog asks for your name and favourite colour. "
                  "Your name appears in every history entry and in the History tab user badge."),
-                ("Edit History",
-                 "Every add, edit, and delete action is logged automatically. "
-                 "Go to History tab to see who changed what and when. "
-                 "Filter by user or date using the table's built-in column sorting."),
+                ("Activity Log",
+                 "Everything you do is logged automatically — not just edits and "
+                 "deletes, but imports, PDF/Excel/SVG/PNG exports, photo imports, "
+                 "column additions, relationships, crate assignments, backups and "
+                 "library changes. Go to the Activity Log tab to see who did what "
+                 "and when; sort by any column."),
                 ("Changing Your Name",
                  "Go to History tab and edit the 'Current user' field at the top."),
             ]),
@@ -3880,6 +3897,9 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         det_lyr.commitChanges()
         self._save_gallery_registry(); self._load_gallery_registry()
         try: self._load_artdet_list()
+        except Exception: pass
+        try: self._log_history('import_photos', os.path.basename(folder), 0,
+                               f"{copied} copied, {matched+created} attached")
         except Exception: pass
         QMessageBox.information(self, "Photo import",
             f"Copied {copied} photo(s) into the project gallery.\n"
@@ -4973,6 +4993,8 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         ok=lyr.dataProvider().addAttributes([QgsField(name,qtype)]); lyr.updateFields()
         if ok:
             self._msg(f"Added column '{name}'")
+            try: self._log_history('add_column', lyr.name(), name, f"type {qtype}")
+            except Exception: pass
             self._on_ctx_layer()  # refresh
             for lcb,fcb in [(self.pot_layer_cb,self.pot_num_field),(self.art_layer_cb,self.art_num_field),(self.ske_layer_cb,self.ske_num_field)]:
                 self._fill_fcb(lcb,fcb)
@@ -5209,6 +5231,8 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
         if f is None or t is None or f==t: QMessageBox.warning(self,"","Select two different contexts."); return
         self.relationships.append({'from_ctx':f,'to_ctx':t,'rel_type':rt,'source':'manual'})
         self._save_rels(); self._refresh_rel_tbl(); self._msg(f"Added: {f} {rt} {t}")
+        try: self._log_history('add_relationship', 'relationships', f"{f}->{t}", f"{f} {rt} {t}")
+        except Exception: pass
 
     def _write_rel_to_layer(self, from_ctx, to_ctx, rel_type):
         """Persist relationship to context_relationships GeoPackage table."""
@@ -5445,7 +5469,10 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
 
     def _exp_svg(self):
         p,_=QFileDialog.getSaveFileName(self,"Export SVG","","SVG (*.svg)")
-        if p: self.hv.export_svg(p)
+        if p:
+            self.hv.export_svg(p)
+            try: self._log_history('export_svg', os.path.basename(p), 0, 'Harris matrix')
+            except Exception: pass
     def _exp_png(self):
         p,_=QFileDialog.getSaveFileName(self,"Export PNG","","PNG (*.png)")
         if not p: return
@@ -5459,6 +5486,8 @@ class ArchWindow(_HistoryAndTabsMixin, _ArchaeologistMixin, _GridMapMixin, QMain
             pp2=QPainter(px); pp2.setRenderHint(QPainter.Antialiasing); pp2.scale(2,2)
             sc.render(pp2,source=rect); pp2.end()
             px.save(p); self._msg(f"Matrix exported: {os.path.basename(p)}")
+            try: self._log_history('export_png', os.path.basename(p), 0, 'Harris matrix')
+            except Exception: pass
         except Exception as e:
             QMessageBox.critical(self,"Export error",str(e))
 

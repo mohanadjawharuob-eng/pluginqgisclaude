@@ -526,24 +526,28 @@ class Page:
         self.new_page()
         p=self.p; ML=self.ML; W=self.W; BW=self.BW
         cy = int(self.H*0.40)
-        # logo on the right, reserve its width
         logo_w=0
         if self.logo and not self.logo.isNull():
             lh=32; logo_w=int(self.logo.width()*lh/max(1,self.logo.height()))
-            p.drawPixmap(W-ML-logo_w, cy-28, logo_w, lh, self.logo)
         avail = BW - logo_w - 18
-        # accent tick
-        p.setPen(QPen(self.C_ACC, 2)); p.drawLine(ML, cy-24, ML+50, cy-24)
-        # title — auto-fit to width so it never clips
-        f=_fit_font("Helvetica", title, max(60,int(avail)), int(26*self.fs),
+        # fit so the longest word fits, then word-wrap so it can never clip
+        longest = max(title.split(), key=len) if title.split() else title
+        f=_fit_font("Helvetica", longest, max(60,int(avail*0.92)), int(26*self.fs),
                     min_size=12, bold=True)
-        fm=QFontMetrics(f); p.setFont(f); p.setPen(self.C_HEAD)
-        base = cy + fm.ascent()//2
-        p.drawText(ML, base, title)
+        p.setFont(f)
+        trect = p.boundingRect(QRectF(ML, 0, avail, 400), Qt.TextWordWrap, title)
+        th = trect.height()
+        top = cy - th/2.0
+        if logo_w:
+            p.drawPixmap(W-ML-logo_w, int(top), logo_w, lh, self.logo)
+        # accent tick above the title block
+        p.setPen(QPen(self.C_ACC, 2)); p.drawLine(ML, int(top-12), ML+50, int(top-12))
+        p.setPen(self.C_HEAD)
+        p.drawText(QRectF(ML, top, avail, th+6), Qt.TextWordWrap, title)
         if subtitle:
             sf=_mk_font("Helvetica", max(8,int(10*self.fs)))
             sfm=QFontMetrics(sf); p.setFont(sf); p.setPen(self.C_MUTE)
-            p.drawText(ML, base + fm.descent() + 8 + sfm.ascent(),
+            p.drawText(ML, int(top+th)+8+sfm.ascent(),
                        sfm.elidedText(subtitle, Qt.ElideRight, max(40,int(avail))))
 
     def table(self, headers, rows, col_widths=None, image_col=None):
